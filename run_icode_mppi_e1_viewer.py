@@ -22,6 +22,97 @@ from mppi_nav_utils import (
 from run_icode_mppi_e1_test import DEFAULT_XML, HybridDynamics, load_icode_checkpoint
 
 
+def _adaptive_profile(mode: str) -> dict:
+    mode_u = str(mode).upper()
+    table = {
+        "OPEN": {
+            "w_goal": 1.00,
+            "w_collision": 1.00,
+            "w_near_obs": 1.00,
+            "w_path_track": 1.00,
+            "w_path_progress": 1.00,
+            "w_smooth": 1.00,
+            "w_terminal_stop": 1.00,
+            "w_path_backtrack": 1.00,
+            "w_goal_motion_away": 1.00,
+            "w_reverse_away": 1.00,
+            "noise_sigma": 1.00,
+        },
+        "TIGHT": {
+            "w_goal": 0.90,
+            "w_collision": 1.35,
+            "w_near_obs": 1.25,
+            "w_path_track": 1.25,
+            "w_path_progress": 1.05,
+            "w_smooth": 1.10,
+            "w_terminal_stop": 0.95,
+            "w_path_backtrack": 1.15,
+            "w_goal_motion_away": 1.10,
+            "w_reverse_away": 1.05,
+            "noise_sigma": 0.62,
+        },
+        "STUCK": {
+            "w_goal": 1.35,
+            "w_collision": 0.90,
+            "w_near_obs": 0.90,
+            "w_path_track": 1.15,
+            "w_path_progress": 1.45,
+            "w_smooth": 0.90,
+            "w_terminal_stop": 0.90,
+            "w_path_backtrack": 1.10,
+            "w_goal_motion_away": 1.25,
+            "w_reverse_away": 1.20,
+            "noise_sigma": 1.35,
+        },
+        "DOCK": {
+            "w_goal": 1.10,
+            "w_collision": 0.70,
+            "w_near_obs": 0.70,
+            "w_path_track": 0.90,
+            "w_path_progress": 1.10,
+            "w_smooth": 1.25,
+            "w_terminal_stop": 1.45,
+            "w_path_backtrack": 1.00,
+            "w_goal_motion_away": 1.10,
+            "w_reverse_away": 1.05,
+            "noise_sigma": 0.55,
+        },
+    }
+    return table.get(mode_u, table["OPEN"])
+
+
+def _apply_adaptive_profile(
+    mppi: MPPIController,
+    base: dict,
+    profile: dict,
+    alpha: float,
+) -> None:
+    a = float(np.clip(alpha, 0.0, 1.0))
+    scalar_keys = (
+        "w_goal",
+        "w_collision",
+        "w_near_obs",
+        "w_path_track",
+        "w_path_progress",
+        "w_smooth",
+        "w_terminal_stop",
+        "w_path_backtrack",
+        "w_goal_motion_away",
+        "w_reverse_away",
+    )
+    for k in scalar_keys:
+        if hasattr(mppi, k) and k in base:
+            tgt = float(base[k]) * float(profile.get(k, 1.0))
+            cur = float(getattr(mppi, k))
+            setattr(mppi, k, (1.0 - a) * cur + a * tgt)
+
+    if "noise_sigma" in base and hasattr(mppi, "noise_sigma"):
+        noise_scale = float(max(0.25, profile.get("noise_sigma", 1.0)))
+        tgt = base["noise_sigma"] * noise_scale
+        cur = mppi.noise_sigma
+        mppi.noise_sigma = torch.clamp((1.0 - a) * cur + a * tgt, min=0.03)
+
+
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run MPPI+ICODE in MuJoCo with live viewer.")
     parser.add_argument("--xml", type=Path, default=DEFAULT_XML)
@@ -77,6 +168,15 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--recover-forward-turn-rate", type=float, default=0.55)
     parser.add_argument("--progress-window", type=int, default=35)
     parser.add_argument("--progress-min-delta", type=float, default=0.08)
+    parser.add_argument("--adaptive-scheduler", action="store_true")
+    parser.add_argument("--adaptive-ema", type=float, default=0.18)
+    parser.add_argument("--adaptive-mode-min-steps", type=int, default=14)
+    parser.add_argument("--adaptive-tight-clearance", type=float, default=0.38)
+    parser.add_argument("--adaptive-tight-clearance-exit", type=float, default=0.52)
+    parser.add_argument("--adaptive-stuck-progress", type=float, default=0.06)
+    parser.add_argument("--adaptive-osc-window", type=int, default=10)
+    parser.add_argument("--adaptive-osc-threshold", type=float, default=2.6)
+    parser.add_argument("--adaptive-dock-radius", type=float, default=0.75)
     parser.add_argument("--goal-slowdown-radius", type=float, default=1.8)
     parser.add_argument("--goal-slowdown-min-scale", type=float, default=0.08)
     parser.add_argument("--w-terminal-stop", type=float, default=120.0)
@@ -270,6 +370,19 @@ def main() -> None:
         world_y_min=min(args.bounds_y_range[0], args.bounds_y_range[1]),
         world_y_max=max(args.bounds_y_range[0], args.bounds_y_range[1]),
     )
+    adaptive_base = {
+        "w_goal": float(mppi.w_goal),
+        "w_collision": float(mppi.w_collision),
+        "w_near_obs": float(mppi.w_near_obs),
+        "w_path_track": float(mppi.w_path_track),
+        "w_path_progress": float(mppi.w_path_progress),
+        "w_smooth": float(mppi.w_smooth),
+        "w_terminal_stop": float(mppi.w_terminal_stop),
+        "w_path_backtrack": float(mppi.w_path_backtrack),
+        "w_goal_motion_away": float(mppi.w_goal_motion_away),
+        "w_reverse_away": float(mppi.w_reverse_away),
+        "noise_sigma": mppi.noise_sigma.detach().clone(),
+    }
 
     if args.init_x is not None and args.init_y is not None and args.init_yaw is not None:
         state = env.reset_with_pose(x=args.init_x, y=args.init_y, yaw=args.init_yaw)
@@ -441,7 +554,8 @@ def main() -> None:
     print(
         f"random_obstacles={args.random_obstacles}, scene_success={random_scene_success}, "
         f"scene_stage={scene_sampling_stage}, line_blockers={line_blockers}, "
-        f"global_guide={args.global_guide}, auto_waypoint={args.auto_waypoint}"
+        f"global_guide={args.global_guide}, auto_waypoint={args.auto_waypoint}, "
+        f"adaptive={args.adaptive_scheduler}"
     )
     print(f"obstacles(x,y,r)=\n{np.array2string(obstacles, precision=3)}")
 
@@ -455,6 +569,11 @@ def main() -> None:
     recover_phase_left = 0
     recover_turn_sign = 1.0
     path_remain_hist = []
+    action_delta_hist = []
+    adaptive_mode = "OPEN"
+    adaptive_mode_hold = 0
+    adaptive_switches = 0
+    adaptive_mode_steps = {"OPEN": 0, "TIGHT": 0, "STUCK": 0, "DOCK": 0}
     prev_action = np.zeros((2,), dtype=np.float32)
     min_dist = float(np.linalg.norm(env.get_base_xy_gt() - target_xy))
     base_xy_hist = [env.get_base_xy_gt().copy()]
@@ -503,6 +622,59 @@ def main() -> None:
                 goal_los_clear_count = 0
             else:
                 goal_los_clear_count += 1
+
+            dpath_recent = None
+            if len(path_remain_hist) >= 2:
+                dpath_recent = float(path_remain_hist[0] - path_remain_hist[-1])
+            osc_now = 0.0
+            if len(action_delta_hist) > 0:
+                osc_now = float(np.mean(action_delta_hist))
+            if args.adaptive_scheduler:
+                dock_gate = float(max(args.adaptive_dock_radius, args.goal_tol * 1.3))
+                stuck_gate = float(max(args.adaptive_stuck_progress, 1e-4))
+                desired_mode = "OPEN"
+                if dist_goal_now <= dock_gate:
+                    desired_mode = "DOCK"
+                else:
+                    in_tight = (
+                        pre_min_clearance <= float(args.adaptive_tight_clearance)
+                        or (
+                            adaptive_mode == "TIGHT"
+                            and pre_min_clearance <= float(args.adaptive_tight_clearance_exit)
+                        )
+                    )
+                    stuck_cond = (
+                        dpath_recent is not None
+                        and dpath_recent < stuck_gate
+                        and dist_goal_now > dock_gate
+                        and (osc_now > float(args.adaptive_osc_threshold) or adaptive_mode == "STUCK")
+                    )
+                    if in_tight:
+                        desired_mode = "TIGHT"
+                    elif stuck_cond:
+                        desired_mode = "STUCK"
+
+                min_steps = max(1, int(args.adaptive_mode_min_steps))
+                if desired_mode != adaptive_mode and adaptive_mode_hold >= min_steps:
+                    print(
+                        f"[adaptive] step={step:04d} {adaptive_mode}->{desired_mode} "
+                        f"clear={pre_min_clearance:.3f} dpath={dpath_recent if dpath_recent is not None else float('nan'):.3f} "
+                        f"osc={osc_now:.3f} dist={dist_goal_now:.3f}"
+                    )
+                    adaptive_mode = desired_mode
+                    adaptive_mode_hold = 0
+                    adaptive_switches += 1
+                adaptive_mode_hold += 1
+                adaptive_mode_steps[adaptive_mode] += 1
+                _apply_adaptive_profile(
+                    mppi=mppi,
+                    base=adaptive_base,
+                    profile=_adaptive_profile(adaptive_mode),
+                    alpha=float(args.adaptive_ema),
+                )
+            else:
+                adaptive_mode = "OPEN"
+                adaptive_mode_steps["OPEN"] += 1
 
             if nav_mode == "NAV" and dist_goal_now <= args.dock_brake_radius:
                 nav_mode = "BRAKE_ALIGN"
@@ -768,6 +940,10 @@ def main() -> None:
             if args.startup_no_reverse_steps > 0 and step < args.startup_no_reverse_steps:
                 action = np.maximum(action, args.startup_min_u)
             action = np.clip(action, env.ctrl_low, env.ctrl_high).astype(np.float32)
+            du_now = float(np.linalg.norm(action - prev_action))
+            action_delta_hist.append(du_now)
+            if len(action_delta_hist) > max(1, int(args.adaptive_osc_window)):
+                action_delta_hist.pop(0)
             prev_action = action.copy()
             state = env.step(action)
             viewer.sync()
@@ -786,7 +962,8 @@ def main() -> None:
                     f"step={step:04d} dist={dist:.3f} "
                     f"xy=({base_xy[0]:.3f},{base_xy[1]:.3f}) "
                     f"u=({action[0]:.2f},{action[1]:.2f}) "
-                    f"clear={min_clearance:.3f} mode={nav_mode}/{recover_mode} gdir={goal_direct_steps}"
+                    f"clear={min_clearance:.3f} mode={nav_mode}/{recover_mode}/{adaptive_mode} "
+                    f"gdir={goal_direct_steps}"
                 )
 
             if nav_mode == "DOCK_STOP":
@@ -824,7 +1001,8 @@ def main() -> None:
         f"waypoint_active_steps={waypoint_active_steps}, waypoint_stuck_events={waypoint_stuck_events}, "
         f"guide_replans={guide_replans}, guide_active_steps={guide_active_steps}, guide_fail_steps={guide_fail_steps}, "
         f"commit_active_steps={guide_commit_active_steps}, commit_flip_events={guide_commit_flip_events}, "
-        f"goal_direct_steps={goal_direct_steps}"
+        f"goal_direct_steps={goal_direct_steps}, adaptive_switches={adaptive_switches}, "
+        f"adaptive_steps={adaptive_mode_steps}"
     )
     print(f"goal_blocked_ratio={goal_blocked_steps / max(1, len(base_xy_hist) - 1):.3f}")
 
