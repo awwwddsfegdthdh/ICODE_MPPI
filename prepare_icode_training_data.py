@@ -1,0 +1,175 @@
+import argparse
+from pathlib import Path
+from typing import List, Tuple
+
+import numpy as np
+
+
+def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    data = np.load(path, allow_pickle=True)
+
+    if "icode__x_t" not in data.files or "icode__u_t" not in data.files:
+        raise KeyError(f"{path} missing icode__x_t or icode__u_t")
+    if "raw__episode" not in data.files:
+        raise KeyError(f"{path} missing raw__episode")
+
+    x = data["icode__x_t"].astype(np.float32)
+    u = data["icode__u_t"].astype(np.float32)
+    ep = data["raw__episode"].astype(np.int32)
+
+    if x.shape[0] < 2:
+        return (
+            np.zeros((0, x.shape[1]), dtype=np.float32),
+            np.zeros((0, u.shape[1]), dtype=np.float32),
+            np.zeros((0, x.shape[1]), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+        )
+
+    same_episode = ep[1:] == ep[:-1]
+
+    if "raw__step" in data.files:
+        step = data["raw__step"].astype(np.int32)
+        contiguous_step = step[1:] == (step[:-1] + 1)
+        valid = same_episode & contiguous_step
+    else:
+        valid = same_episode
+
+    x_t = x[:-1][valid]
+    u_t = u[:-1][valid]
+    x_tp1 = x[1:][valid]
+
+    if "raw__sim_time" in data.files:
+        sim_time = data["raw__sim_time"].astype(np.float32)
+        dt = (sim_time[1:] - sim_time[:-1])[valid]
+        dt = np.where(np.isfinite(dt) & (dt >= 0.0), dt, 0.0).astype(np.float32)
+    else:
+        dt = np.zeros((x_t.shape[0],), dtype=np.float32)
+
+    return x_t, u_t, x_tp1, dt
+
+
+def safe_std(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    s = a.std(axis=0)
+    s[s < eps] = eps
+    return s
+
+
+def build_dataset(args: argparse.Namespace) -> None:
+    xs: List[np.ndarray] = []
+    us: List[np.ndarray] = []
+    ys: List[np.ndarray] = []
+    dts: List[np.ndarray] = []
+
+    for p in args.inputs:
+        x_t, u_t, x_tp1, dt = load_transitions_from_converted(p)
+        print(f"Loaded {p}: transitions={x_t.shape[0]}")
+        if x_t.shape[0] == 0:
+            continue
+        xs.append(x_t)
+        us.append(u_t)
+        ys.append(x_tp1)
+        dts.append(dt)
+
+    if not xs:
+        raise RuntimeError("No valid transitions loaded from inputs.")
+
+    x_all = np.concatenate(xs, axis=0)
+    u_all = np.concatenate(us, axis=0)
+    y_all = np.concatenate(ys, axis=0)
+    dt_all = np.concatenate(dts, axis=0)
+    dx_all = y_all - x_all
+
+    n = x_all.shape[0]
+    rng = np.random.default_rng(args.seed)
+    perm = rng.permutation(n)
+
+    train_n = int(n * args.train_ratio)
+    val_n = int(n * args.val_ratio)
+    test_n = n - train_n - val_n
+
+    train_idx = perm[:train_n]
+    val_idx = perm[train_n : train_n + val_n]
+    test_idx = perm[train_n + val_n :]
+
+    x_train = x_all[train_idx]
+    u_train = u_all[train_idx]
+    y_train = y_all[train_idx]
+    dx_train = dx_all[train_idx]
+    dt_train = dt_all[train_idx]
+
+    x_val = x_all[val_idx]
+    u_val = u_all[val_idx]
+    y_val = y_all[val_idx]
+    dx_val = dx_all[val_idx]
+    dt_val = dt_all[val_idx]
+
+    x_test = x_all[test_idx]
+    u_test = u_all[test_idx]
+    y_test = y_all[test_idx]
+    dx_test = dx_all[test_idx]
+    dt_test = dt_all[test_idx]
+
+    x_mean = x_train.mean(axis=0)
+    x_std = safe_std(x_train)
+    u_mean = u_train.mean(axis=0)
+    u_std = safe_std(u_train)
+    y_mean = y_train.mean(axis=0)
+    y_std = safe_std(y_train)
+    dx_mean = dx_train.mean(axis=0)
+    dx_std = safe_std(dx_train)
+
+    output_parent = args.output.parent
+    output_parent.mkdir(parents=True, exist_ok=True)
+
+    save_dict = {
+        "meta__inputs": np.array([str(p) for p in args.inputs], dtype=object),
+        "meta__seed": np.array([args.seed], dtype=np.int32),
+        "meta__split_ratio": np.array([args.train_ratio, args.val_ratio, 1.0 - args.train_ratio - args.val_ratio], dtype=np.float32),
+        "meta__num_total": np.array([n], dtype=np.int32),
+        "meta__num_train": np.array([train_n], dtype=np.int32),
+        "meta__num_val": np.array([val_n], dtype=np.int32),
+        "meta__num_test": np.array([test_n], dtype=np.int32),
+        "meta__x_fields": np.array(["x_odom", "y_odom", "psi_odom", "v_body", "wz_body", "dqL", "dqR"], dtype=object),
+        "meta__u_fields": np.array(["u_0", "u_1"], dtype=object),
+        "train__x_t": x_train,
+        "train__u_t": u_train,
+        "train__x_tp1": y_train,
+        "train__dx_t": dx_train,
+        "train__dt": dt_train,
+        "val__x_t": x_val,
+        "val__u_t": u_val,
+        "val__x_tp1": y_val,
+        "val__dx_t": dx_val,
+        "val__dt": dt_val,
+        "test__x_t": x_test,
+        "test__u_t": u_test,
+        "test__x_tp1": y_test,
+        "test__dx_t": dx_test,
+        "test__dt": dt_test,
+        "stats__x_mean": x_mean.astype(np.float32),
+        "stats__x_std": x_std.astype(np.float32),
+        "stats__u_mean": u_mean.astype(np.float32),
+        "stats__u_std": u_std.astype(np.float32),
+        "stats__y_mean": y_mean.astype(np.float32),
+        "stats__y_std": y_std.astype(np.float32),
+        "stats__dx_mean": dx_mean.astype(np.float32),
+        "stats__dx_std": dx_std.astype(np.float32),
+    }
+
+    np.savez_compressed(args.output, **save_dict)
+    print(f"Saved ICODE training bundle to: {args.output}")
+    print(f"Total transitions: {n} (train={train_n}, val={val_n}, test={test_n})")
+
+
+def build_argparser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Merge converted datasets, split train/val/test, and compute normalization stats.")
+    parser.add_argument("--inputs", type=Path, nargs="+", required=True, help="Paths to converted .npz files.")
+    parser.add_argument("--output", type=Path, required=True, help="Output bundled .npz path.")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-ratio", type=float, default=0.8)
+    parser.add_argument("--val-ratio", type=float, default=0.1)
+    return parser
+
+
+if __name__ == "__main__":
+    build_dataset(build_argparser().parse_args())

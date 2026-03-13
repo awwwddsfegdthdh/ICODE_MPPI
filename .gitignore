@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtualenv / local env
+.venv/
+venv/
+
+# Large generated data
+datasets/
+runs/
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# MuJoCo runtime logs
+MUJOCO_LOG.TXT

@@ -1,0 +1,89 @@
+<mujoco model="mobile_robot">
+    <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
+    <option timestep="0.02" gravity="0 0 -9.81"/>
+    <visual>
+        <global offwidth="160" offheight="120"/>
+        <map znear="0.01" zfar="20"/>
+    </visual>
+    
+    <asset>
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+        <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 .2" width="512" height="512"/>
+        <material name="matplane" texture="texplane" texrepeat="5 5" texuniform="true"/>
+    </asset>
+    
+    <worldbody>
+        <!-- 环境光 -->
+        <light directional="true" diffuse=".8 .8 .8" pos="0 0 10" dir="0 0 -1"/>
+        
+        <!-- 地面 -->
+        <geom name="ground" type="plane" size="10 10 0.1" material="matplane"/>
+        
+        <!-- 障碍物 -->
+        <geom name="obs1" type="cylinder" pos="2.5 1.5 0.5" size="0.4 0.5" rgba="0.8 0.2 0.2 1"/>
+        <geom name="obs2" type="cylinder" pos="4.0 -1.0 0.5" size="0.6 0.5" rgba="0.8 0.2 0.2 1"/>
+        <geom name="obs3" type="cylinder" pos="1.5 -2.5 0.5" size="0.3 0.5" rgba="0.8 0.2 0.2 1"/>
+
+        <!-- 目标点可视化 (虚化的球) -->
+        <site name="target" pos="6.0 2.0 0.1" size="0.2" type="sphere" rgba="0 1 0 0.5"/>
+        <site name="obs1_site" pos="2.5 1.5 0.5" size="0.02" type="sphere" rgba="1 0 0 0.2"/>
+        <site name="obs2_site" pos="4.0 -1.0 0.5" size="0.02" type="sphere" rgba="1 0 0 0.2"/>
+        <site name="obs3_site" pos="1.5 -2.5 0.5" size="0.02" type="sphere" rgba="1 0 0 0.2"/>
+
+        <!-- 移动机器人抽象模型 (类似差速小车/气垫船) -->
+        <body name="robot" pos="0 0 0.05">
+            <!-- 限制在 2D 平面运动 (防止起飞翻车) -->
+            <joint name="slide_x" type="slide" axis="1 0 0" damping="0.5"/>
+            <joint name="slide_y" type="slide" axis="0 1 0" damping="0.5"/>
+            <joint name="hinge_z" type="hinge" axis="0 0 1" damping="0.5"/>
+            
+            <geom name="chassis" type="box" size="0.3 0.2 0.05" rgba="0.2 0.6 0.8 1" mass="5.0"/>
+            <!-- 标识车头方向 -->
+            <geom name="front_indicator" type="box" pos="0.3 0 0" size="0.05 0.05 0.05" rgba="0.9 0.9 0.1 1"/>
+            <!-- 控制受力点 -->
+            <site name="robot_center" pos="0 0 0" size="0.01"/>
+            <site name="imu_site" pos="0 0 0.03" size="0.01" type="sphere" rgba="1 1 0 0.3"/>
+            <site name="front_bumper_site" pos="0.36 0 0.03" size="0.02 0.14 0.03" type="box" rgba="1 0 0 0.2"/>
+            <site name="camera_ref_site" pos="0.30 0 0.10" size="0.01" type="sphere" rgba="0 0.6 1 0.4"/>
+            <site name="lidar_left_front_site" pos="0.30 0.10 0.05" size="0.008" type="sphere" zaxis="0.866 0.5 0" rgba="0 1 0 0.3"/>
+            <site name="lidar_front_site" pos="0.32 0 0.05" size="0.008" type="sphere" zaxis="1 0 0" rgba="0 1 0 0.3"/>
+            <site name="lidar_right_front_site" pos="0.30 -0.10 0.05" size="0.008" type="sphere" zaxis="0.866 -0.5 0" rgba="0 1 0 0.3"/>
+            <camera name="front_depth_cam" pos="0.30 0 0.10" euler="0 0 0" fovy="70"/>
+        </body>
+    </worldbody>
+
+    <actuator>
+        <!-- 差速小车抽象：前进推力与转向力矩 -->
+        <!-- gear的六个分量分别对应局部坐标系的 x, y, z平移和 x, y, z旋转 -->
+        <motor name="forward_force" site="robot_center" gear="100 0 0 0 0 0" ctrlrange="-10 10" ctrllimited="true"/>
+        <motor name="turning_torque" site="robot_center" gear="0 0 0 0 0 20" ctrlrange="-5 5" ctrllimited="true"/>
+    </actuator>
+
+    <sensor>
+        <!-- 原始标量传感器流 -->
+        <jointpos name="joint_x_pos" joint="slide_x"/>
+        <jointpos name="joint_y_pos" joint="slide_y"/>
+        <jointpos name="joint_yaw_pos" joint="hinge_z"/>
+        <jointvel name="joint_x_vel" joint="slide_x"/>
+        <jointvel name="joint_y_vel" joint="slide_y"/>
+        <jointvel name="joint_yaw_vel" joint="hinge_z"/>
+        <accelerometer name="imu_acc" site="imu_site"/>
+        <gyro name="imu_gyro" site="imu_site"/>
+        <touch name="touch_front_force" site="front_bumper_site"/>
+        <rangefinder name="lidar_left_front" site="lidar_left_front_site" cutoff="8.0"/>
+        <rangefinder name="lidar_front" site="lidar_front_site" cutoff="8.0"/>
+        <rangefinder name="lidar_right_front" site="lidar_right_front_site" cutoff="8.0"/>
+
+        <!-- 监督真值（上帝视角） -->
+        <framepos name="base_pos_gt" objtype="body" objname="robot"/>
+        <framequat name="base_quat_gt" objtype="body" objname="robot"/>
+        <framelinvel name="base_linvel_gt" objtype="body" objname="robot"/>
+        <frameangvel name="base_angvel_gt" objtype="body" objname="robot"/>
+        <framepos name="camera_pos_gt" objtype="site" objname="camera_ref_site"/>
+        <framequat name="camera_quat_gt" objtype="site" objname="camera_ref_site"/>
+        <framepos name="target_pos_gt" objtype="site" objname="target"/>
+        <framepos name="obs1_pos_gt" objtype="site" objname="obs1_site"/>
+        <framepos name="obs2_pos_gt" objtype="site" objname="obs2_site"/>
+        <framepos name="obs3_pos_gt" objtype="site" objname="obs3_site"/>
+    </sensor>
+</mujoco>
