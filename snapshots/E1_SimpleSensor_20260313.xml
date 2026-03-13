@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="E1_Mobile_Robot">
+
+  <!-- ========== 编译器选项 ========== -->
+  <compiler angle="radian" eulerseq="xyz" inertiafromgeom="true" boundmass="0.001" boundinertia="0.001"/>
+  
+  <!-- ========== 资源定义部分 ========== -->
+  <asset>
+    <!-- 纹理和材质定义 -->
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+    <material name="grid" texture="grid" texrepeat="2 2" texuniform="true" reflectance=".2"/>
+    
+    <!-- 网格文件定义 -->
+    <mesh name="base_link_mesh" file="../meshes/base_link.STL"/>
+    <mesh name="link_leftwheel_mesh" file="../meshes/link_leftwheel.STL"/>
+    <mesh name="link_rightwheel_mesh" file="../meshes/link_rightwheel.STL"/>
+    <mesh name="link_leftcaster_up_mesh" file="../meshes/link_leftcaster_up.STL"/>
+    <mesh name="link_leftcaster_down_mesh" file="../meshes/link_leftcaster_down.STL"/>
+    <mesh name="link_rightcaster_up_mesh" file="../meshes/link_rightcaster_up.STL"/>
+    <mesh name="link_rightcaster_down_mesh" file="../meshes/link_rightcaster_down.STL"/>
+    <mesh name="link_lidar_mesh" file="../meshes/link_lidar.STL"/>
+    <mesh name="link_sonar0_mesh" file="../meshes/link_sonar0.STL"/>
+    <mesh name="link_sonar1_mesh" file="../meshes/link_sonar1.STL"/>
+    <mesh name="link_sonar2_mesh" file="../meshes/link_sonar2.STL"/>
+    <mesh name="link_sonar3_mesh" file="../meshes/link_sonar3.STL"/>
+    <mesh name="link_sonar4_mesh" file="../meshes/link_sonar4.STL"/>
+  </asset>
+
+  <!-- ========== 选项设置 ========== -->
+  <option timestep="0.002" iterations="100" tolerance="1e-8" cone="pyramidal" impratio="4" gravity="0 0 -9.81">
+    <flag contact="enable" energy="enable" constraint="enable"/>
+  </option>
+
+  <!-- ========== 可视化与离屏渲染（深度相机） ========== -->
+  <visual>
+    <global offwidth="640" offheight="480"/>
+    <map znear="0.01" zfar="20"/>
+  </visual>
+
+  <!-- ========== 默认物理参数 ========== -->
+  <default>
+    <!-- 关节默认参数 -->
+    <joint armature="0.01" damping="0.05"/>
+    
+    <!-- 几何体默认参数 -->
+    <geom condim="3" friction="0.7 0.005 0.0001" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    
+    <!-- 电机默认参数 -->
+    <motor ctrlrange="-1 1" ctrllimited="true"/>
+  </default>
+
+  <!-- ========== 世界和机器人主体定义 ========== -->
+  <worldbody>
+    <!-- 地面平面 -->
+    <geom name="ground" type="plane" size="5 5 0.1" material="grid" condim="3" friction="0.7 0.005 0.0001"/>
+    
+    <!-- 光照设置 -->
+    <light directional="true" active="true" pos="0 0 3" dir="0 0 -1" castshadow="false"/>
+    <light directional="true" active="true" pos="2 2 2" dir="-0.5 -0.5 -1" castshadow="false"/>
+    <light directional="true" active="true" pos="-2 2 2" dir="0.5 -0.5 -1" castshadow="false"/>
+
+    <!-- 上帝视角相机（仅用于监督和调试，不用于部署） -->
+    <camera name="overhead_debug_cam" pos="0 0 6.0" xyaxes="1 0 0 0 1 0"/>
+
+    <!-- supervisor 目标点（第一阶段直接作为目标真值） -->
+    <body name="goal_marker" pos="3.0 0.0 0.12">
+      <geom name="goal_geom" type="sphere" size="0.12" rgba="0.2 0.8 0.2 0.35" contype="0" conaffinity="0"/>
+      <site name="goal_site" type="sphere" size="0.015" rgba="0 1 0 1"/>
+    </body>
+
+    <!-- 静态障碍物（用于深度/触碰/避障监督） -->
+    <body name="obs_front" pos="1.6 0.0 0.25">
+      <geom name="obs_front_geom" type="cylinder" size="0.25 0.25" rgba="0.9 0.4 0.2 1"/>
+      <site name="obs_front_site" type="sphere" size="0.01" pos="0 0 0.25" rgba="1 0.6 0.2 1"/>
+    </body>
+    <body name="obs_left" pos="1.0 0.9 0.20">
+      <geom name="obs_left_geom" type="box" size="0.20 0.20 0.20" rgba="0.3 0.6 0.9 1"/>
+      <site name="obs_left_site" type="sphere" size="0.01" pos="0 0 0.20" rgba="0.3 0.6 1 1"/>
+    </body>
+    <body name="obs_right" pos="1.0 -0.9 0.20">
+      <geom name="obs_right_geom" type="box" size="0.20 0.20 0.20" rgba="0.3 0.6 0.9 1"/>
+      <site name="obs_right_site" type="sphere" size="0.01" pos="0 0 0.20" rgba="0.3 0.6 1 1"/>
+    </body>
+    <body name="obs_mid_left" pos="1.9 0.55 0.20">
+      <geom name="obs_mid_left_geom" type="cylinder" size="0.18 0.20" rgba="0.85 0.55 0.25 1"/>
+      <site name="obs_mid_left_site" type="sphere" size="0.01" pos="0 0 0.20" rgba="1 0.7 0.3 1"/>
+    </body>
+    <body name="obs_mid_right" pos="1.9 -0.55 0.20">
+      <geom name="obs_mid_right_geom" type="box" size="0.16 0.16 0.20" rgba="0.4 0.75 0.9 1"/>
+      <site name="obs_mid_right_site" type="sphere" size="0.01" pos="0 0 0.20" rgba="0.4 0.75 1 1"/>
+    </body>
+    
+    <!-- ========== 测试物体 ========== -->
+    <!--
+    <body name="test_box1" pos="2.0 0 0.1">
+      <geom type="box" size="0.2 0.2 0.2" rgba="0.8 0.3 0.3 1"/>
+    </body>
+    
+    <body name="test_box2" pos="0.5 0.8 0.1">
+      <geom type="box" size="0.15 0.15 0.2" rgba="0.3 0.8 0.3 1"/>
+    </body>
+    
+    <body name="test_box3" pos="0.7 -1 0.1">
+      <geom type="box" size="0.15 0.15 0.2" rgba="0.3 0.3 0.8 1"/>
+    </body>
+    -->
+    
+    
+    <!-- ========== 机器人主体结构 ========== -->
+    <body name="base_link" pos="0 0 0.2" euler="0 0 0">
+      <freejoint name="base_free_joint"/>
+      
+      <!-- 基础链接的几何形状 -->
+      <geom name="base_geom" type="mesh" mesh="base_link_mesh" pos="0 0 0" rgba="0.498 0.498 0.498 1"/>
+      
+      <!-- 基础链接的惯性属性 -->
+      <inertial pos="0.069015 0.0065334 0.055774" mass="5.64" diaginertia="0.019874 0.017356 0.032339"/>
+
+      <!-- ICODE/MPPI 推荐观测基准点 -->
+      <site name="imu_site" type="sphere" size="0.01" pos="0.069 0 0.11" rgba="1 1 0 0.6"/>
+      <site name="front_bumper_site" type="box" size="0.015 0.11 0.02" pos="0.29 0 0.08" rgba="1 0 0 0.2"/>
+      <site name="camera_ref_site" type="sphere" size="0.008" pos="0.245 0 0.175" rgba="0 0.6 1 0.8"/>
+      <!-- 前向深度相机：深度/距离图像需通过渲染API读取，不在 sensordata 标量流中 -->
+      <camera name="front_depth_cam" pos="0.245 0 0.175" euler="0 0 0" fovy="70"/>
+      
+      <!-- ========== 左驱动轮 ========== -->
+      <body name="link_leftwheel" pos="0 0.185 0">
+        <joint name="joint_leftwheel" type="hinge" pos="0 0 0" axis="0 1 0" damping="0.02"/>
+        <geom name="leftwheel_geom" type="mesh" mesh="link_leftwheel_mesh" pos="0 0 0" rgba="0.298 0.298 0.298 1" 
+              friction="1.0 0.3 0.0001"/>
+        <inertial pos="6.8897E-06 -0.021408 3.5386E-05" mass="0.53358" diaginertia="0.0013103 0.0024695 0.0013106"/>
+      </body>
+      
+      <!-- ========== 右驱动轮 ========== -->
+      <body name="link_rightwheel" pos="0 -0.185 0">
+        <joint name="joint_rightwheel" type="hinge" pos="0 0 0" axis="0 1 0" damping="0.02"/>
+        <geom name="rightwheel_geom" type="mesh" mesh="link_rightwheel_mesh" pos="0 0 0" rgba="0.298 0.298 0.298 1" 
+              friction="1.0 0.3 0.0001"/>
+        <inertial pos="-7.5525E-09 0.021408 2.5753E-09" mass="0.53358" diaginertia="0.0013103 0.0024695 0.0013106"/>
+      </body>
+      
+      <!-- ========== 左万向轮（上部分） ========== -->
+      <body name="link_leftcaster_up" pos="0.18874 0.105 -0.008702">
+        <geom name="leftcaster_up_geom" type="mesh" mesh="link_leftcaster_up_mesh" pos="0 0 0" rgba="0.698 0.698 0.698 1"/>
+        <inertial pos="-0.12476 -0.099601 0.059217" mass="0.71898" diaginertia="0.009774 0.0086997 0.012347"/>
+        
+        <!-- ========== 左万向轮（下部分） ========== -->
+        <body name="link_leftcaster_down" pos="0.011383 0.019986 -0.0465" euler="0 0 1.0531">
+          <joint name="joint_leftcaster_down" type="hinge" pos="0 0 0" axis="0 1 0" damping="0.005" frictionloss="0.0005"/>
+          <geom name="leftcaster_down_geom" type="mesh" mesh="link_leftcaster_down_mesh" pos="0 0 0" rgba="0.298 0.298 0.298 1" 
+                friction="0.5 0.1 0.0001" condim="1"/>
+          <inertial pos="-1.3879E-07 8.69E-09 3.8822E-09" mass="0.049373" diaginertia="9.047E-06 1.4629E-05 9.0495E-06"/>
+        </body>
+      </body>
+      
+      <!-- ========== 右万向轮（上部分） ========== -->
+      <body name="link_rightcaster_up" pos="0.18874 -0.105 -0.008702">
+        <geom name="rightcaster_up_geom" type="mesh" mesh="link_rightcaster_up_mesh" pos="0 0 0" rgba="0.698 0.698 0.698 1"/>
+        <inertial pos="-0.12476 0.1104 0.059217" mass="0.71898" diaginertia="0.009774 0.0086997 0.012347"/>
+        
+        <!-- ========== 右万向轮（下部分） ========== -->
+        <body name="link_rightcaster_down" pos="0.011383 -0.019986 -0.0465" euler="0 0 1.0531">
+          <joint name="joint_rightcaster_down" type="hinge" pos="0 0 0" axis="0 1 0" damping="0.005" frictionloss="0.0005"/>
+          <geom name="rightcaster_down_geom" type="mesh" mesh="link_rightcaster_down_mesh" pos="0 0 0" rgba="0.298 0.298 0.298 1" 
+                friction="0.5 0.1 0.0001" condim="1"/>
+          <inertial pos="-1.3879E-07 8.6899E-09 3.8822E-09" mass="0.049373" diaginertia="9.047E-06 1.4629E-05 9.0495E-06"/>
+        </body>
+      </body>
+      
+      <!-- ========== 激光雷达 ========== -->
+      <body name="link_lidar" pos="0.24271 0 0.060068">
+        <geom name="lidar_geom" type="mesh" mesh="link_lidar_mesh" pos="0 0 0" rgba="1 1 1 1"/>
+        <inertial pos="-0.00059182 -0.00010621 0.0035863" mass="0.46518" diaginertia="0.00023403 0.00023082 0.00043315"/>
+        
+        <!-- 激光雷达传感器站点 - 5条辐射状对称的扫描线 -->
+        <!-- 使用zaxis直接指定站点Z轴方向 -->
+        <!-- 角度：-60°, -30°, 0°, 30°, 60°（相对于前方） -->
+        <site name="lidar_left60" type="sphere" size="0.005" pos="0.01 0 0" zaxis="0.5 -0.866 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_left30" type="sphere" size="0.005" pos="0.01 0 0" zaxis="0.866 -0.5 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_front" type="sphere" size="0.005" pos="0.01 0 0" zaxis="1 0 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_right30" type="sphere" size="0.005" pos="0.01 0 0" zaxis="0.866 0.5 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_right60" type="sphere" size="0.005" pos="0.01 0 0" zaxis="0.5 0.866 0" rgba="0 1 0 0.5"/>
+        
+        <site name="lidar_left-60" type="sphere" size="0.005" pos="0.01 0 0" zaxis="-0.5 0.866 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_left-30" type="sphere" size="0.005" pos="0.01 0 0" zaxis="-0.866 0.5 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_back" type="sphere" size="0.005" pos="0.01 0 0" zaxis="-1 0 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_right-30" type="sphere" size="0.005" pos="0.01 0 0" zaxis="-0.866 -0.5 0" rgba="0 1 0 0.5"/>
+        <site name="lidar_right-60" type="sphere" size="0.005" pos="0.01 0 0" zaxis="-0.5 -0.866 0" rgba="0 1 0 0.5"/>
+      </body>
+      
+      <!-- ========== 超声波传感器 ========== -->
+      <!-- 左前超声波传感器 -->
+      <body name="link_sonar0" pos="0.2026 0.14762 0.15169" euler="0 0 0.87266">
+        <geom name="sonar0_geom" type="mesh" mesh="link_sonar0_mesh" pos="0 0 0" rgba="0.529 0.549 0.549 1"/>
+        <inertial pos="0.0022972 -1.6501E-05 -0.00021462" mass="0.067466" diaginertia="1.2442E-05 3.3572E-06 1.1597E-05"/>
+        <!-- 站点方向：zaxis指定站点Z轴方向，这里应该是传感器本体的X轴正方向 -->
+        <!-- 但注意：传感器本体已经旋转了0.87266弧度（约50度），所以其X轴方向需要计算 -->
+        <!-- 我们先尝试一个简单的方法：直接指定方向 -->
+        <site name="sonar0_site" type="sphere" size="0.005" pos="0.015 0 0" zaxis="1 0 0" rgba="0 1 0 0.5"/>
+      </body>
+      
+      <!-- 正前超声波传感器 -->
+      <body name="link_sonar1" pos="0.27144 0 0.15169" euler="0 0 0">
+        <geom name="sonar1_geom" type="mesh" mesh="link_sonar1_mesh" pos="0 0 0" rgba="0.529 0.549 0.549 1"/>
+        <inertial pos="0.0022972 1.8336E-05 -0.00021503" mass="0.067466" diaginertia="1.2442E-05 3.3572E-06 1.1597E-05"/>
+        <!-- 正前传感器，本体没有旋转，X轴正方向就是前方 -->
+        <site name="sonar1_site" type="sphere" size="0.005" pos="0.015 0 0" zaxis="1 0 0" rgba="0 1 0 0.5"/>
+      </body>
+      
+      <!-- 右前超声波传感器 -->
+      <body name="link_sonar2" pos="0.2026 -0.14762 0.15169" euler="0 0 -0.87266">
+        <geom name="sonar2_geom" type="mesh" mesh="link_sonar2_mesh" pos="0 0 0" rgba="0.529 0.549 0.549 1"/>
+        <inertial pos="0.0022972 1.6432E-05 -0.0002143" mass="0.067466" diaginertia="1.2442E-05 3.3574E-06 1.1598E-05"/>
+        <site name="sonar2_site" type="sphere" size="0.005" pos="0.015 0 0" zaxis="1 0 0" rgba="0 1 0 0.5"/>
+      </body>
+      
+      <!-- 左后超声波传感器 -->
+      <body name="link_sonar3" pos="-0.045127 0.14762 0.1517" euler="0 0 2.2689">
+        <geom name="sonar3_geom" type="mesh" mesh="link_sonar3_mesh" pos="0 0 0" rgba="0.529 0.549 0.549 1"/>
+        <inertial pos="0.0022972 1.5651E-05 -0.00021745" mass="0.067466" diaginertia="1.2443E-05 3.3576E-06 1.1598E-05"/>
+        <site name="sonar3_site" type="sphere" size="0.005" pos="0.03 0 0" zaxis="1 0 0" rgba="0 1 0 0.5"/>
+      </body>
+      
+      <!-- 右后超声波传感器 -->
+      <body name="link_sonar4" pos="-0.0451268326173845 -0.147616764189027 0.151694595314833" euler="0 0 -2.26892802759263">
+        <geom name="sonar4_geom" type="mesh" mesh="link_sonar4_mesh" pos="0 0 0" rgba="0.498 0.498 0.498 1"/>
+        <inertial pos="0.0022972 1.5651E-05 -0.00021745" mass="0.067466" diaginertia="1.2443E-05 3.3576E-06 1.1598E-05"/>
+        <site name="sonar4_site" type="sphere" size="0.005" pos="0.03 0 0" zaxis="1 0 0" rgba="0 1 0 0.5"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- 执行器定义 -->
+    <!-- 速度控制模式，角速度 -->
+
+    <actuator>
+        <velocity name="left_motor" joint="joint_leftwheel" kv="12" gear="1" ctrlrange="-20 20" ctrllimited="true"/>
+        <velocity name="right_motor" joint="joint_rightwheel" kv="12" gear="1" ctrlrange="-20 20" ctrllimited="true"/>
+    </actuator>
+
+  <!--传感器定义-->
+  <sensor>
+    <!-- ===== 基本状态传感器 ===== -->
+    <framepos objtype="xbody" objname="base_link" name="base_position"/>
+    <framequat objtype="xbody" objname="base_link" name="base_orientation"/>
+    
+    <jointpos joint="joint_leftwheel" name="left_wheel_angle"/>
+    <jointpos joint="joint_rightwheel" name="right_wheel_angle"/>
+    <jointvel joint="joint_leftwheel" name="left_wheel_velocity"/>
+    <jointvel joint="joint_rightwheel" name="right_wheel_velocity"/>
+    <!-- ICODE/MPPI 统一命名（与上面重复采样同一关节） -->
+    <jointpos joint="joint_leftwheel" name="wheel_l_pos"/>
+    <jointpos joint="joint_rightwheel" name="wheel_r_pos"/>
+    <jointvel joint="joint_leftwheel" name="wheel_l_vel"/>
+    <jointvel joint="joint_rightwheel" name="wheel_r_vel"/>
+    
+    <jointpos joint="joint_leftcaster_down" name="left_caster_angle"/>
+    <jointpos joint="joint_rightcaster_down" name="right_caster_angle"/>
+    <jointvel joint="joint_leftcaster_down" name="left_caster_velocity"/>
+    <jointvel joint="joint_rightcaster_down" name="right_caster_velocity"/>
+    
+    <!-- ===== IMU传感器 ===== -->
+    <accelerometer site="imu_site" name="imu_acc"/>
+    <gyro site="imu_site" name="imu_gyro"/>
+    <framelinacc objtype="xbody" objname="base_link" name="imu_accelerometer"/>
+    <frameangvel objtype="xbody" objname="base_link" name="imu_gyroscope"/>
+    <framelinvel objtype="xbody" objname="base_link" name="base_linear_velocity"/>
+    
+    <!-- ===== 电机扭矩传感器 ===== -->
+    <actuatorfrc name="left_motor_torque" actuator="left_motor"/>
+    <actuatorfrc name="right_motor_torque" actuator="right_motor"/>
+    
+    <!-- ===== 超声波传感器 ===== -->
+    <rangefinder name="sonar0" site="sonar0_site" cutoff="3.0" noise="0.02"/>
+    <rangefinder name="sonar1" site="sonar1_site" cutoff="3.0" noise="0.02"/>
+    <rangefinder name="sonar2" site="sonar2_site" cutoff="3.0" noise="0.02"/>
+    <rangefinder name="sonar3" site="sonar3_site" cutoff="3.0" noise="0.02"/>
+    <rangefinder name="sonar4" site="sonar4_site" cutoff="3.0" noise="0.02"/>
+    
+    <!-- ===== 激光雷达传感器 ===== -->
+    <rangefinder name="lidar_left60" site="lidar_left60" cutoff="10.0" noise="0.005"/>
+    <rangefinder name="lidar_left30" site="lidar_left30" cutoff="10.0" noise="0.005"/>
+    <rangefinder name="lidar_front" site="lidar_front" cutoff="10.0" noise="0.005"/>
+    <rangefinder name="lidar_right30" site="lidar_right30" cutoff="10.0" noise="0.005"/>
+    <rangefinder name="lidar_right60" site="lidar_right60" cutoff="10.0" noise="0.005"/>
+    
+    <!-- ===== 接触传感器 ===== -->
+    <touch name="touch_front_force" site="front_bumper_site"/>
+    <touch name="front_contact" site="sonar1_site"/>
+
+    <!-- ===== 监督真值（上帝视角） ===== -->
+    <framepos objtype="body" objname="base_link" name="base_pos_gt"/>
+    <framequat objtype="body" objname="base_link" name="base_quat_gt"/>
+    <framelinvel objtype="body" objname="base_link" name="base_linvel_gt"/>
+    <frameangvel objtype="body" objname="base_link" name="base_angvel_gt"/>
+    <framepos objtype="site" objname="camera_ref_site" name="camera_pos_gt"/>
+    <framequat objtype="site" objname="camera_ref_site" name="camera_quat_gt"/>
+    <framepos objtype="site" objname="goal_site" name="goal_pos_gt"/>
+    <framepos objtype="site" objname="obs_front_site" name="obs_front_pos_gt"/>
+    <framepos objtype="site" objname="obs_left_site" name="obs_left_pos_gt"/>
+    <framepos objtype="site" objname="obs_right_site" name="obs_right_pos_gt"/>
+    <framepos objtype="site" objname="obs_mid_left_site" name="obs_mid_left_pos_gt"/>
+    <framepos objtype="site" objname="obs_mid_right_site" name="obs_mid_right_pos_gt"/>
+    
+    <!-- ===== 编码器模拟 ===== -->
+    <user name="encoder_left" dim="1" datatype="real" needstage="vel"/>
+    <user name="encoder_right" dim="1" datatype="real" needstage="vel"/>
+  </sensor>
+
+  <!-- ========== 接触排除 ========== -->
+  <contact>
+    <!-- 排除主体与轮子之间的接触 -->
+    <exclude body1="base_link" body2="link_leftwheel"/>
+    <exclude body1="base_link" body2="link_rightwheel"/>
+    <!-- 排除万向轮上下部分之间的接触 -->
+    <exclude body1="link_leftcaster_up" body2="link_leftcaster_down"/>
+    <exclude body1="link_rightcaster_up" body2="link_rightcaster_down"/>
+    <!-- 排除传感器与主体之间的接触 -->
+    <exclude body1="base_link" body2="link_lidar"/>
+    <exclude body1="base_link" body2="link_sonar0"/>
+    <exclude body1="base_link" body2="link_sonar1"/>
+    <exclude body1="base_link" body2="link_sonar2"/>
+    <exclude body1="base_link" body2="link_sonar3"/>
+    <exclude body1="base_link" body2="link_sonar4"/>
+  </contact>
+
+</mujoco>
