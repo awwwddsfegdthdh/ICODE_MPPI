@@ -8,6 +8,13 @@ from typing import Dict, List, Tuple
 import mujoco
 import numpy as np
 from mppi_nav_utils import sample_obstacles_adaptive
+from state_convention import (
+    CONTROL_DEFINITION,
+    STATE_CONVENTION_VERSION,
+    canonical_drive_sign,
+    convention_as_meta,
+    diff_drive_inverse,
+)
 
 
 DEFAULT_XML = (
@@ -344,9 +351,13 @@ def expert_control_action(
 
     w_cmd = float(np.clip(w_cmd, -args.expert_w_max, args.expert_w_max))
 
-    dq_r = (v_cmd + 0.5 * args.wheel_base * w_cmd) / max(args.wheel_radius, 1e-6)
-    dq_l = (v_cmd - 0.5 * args.wheel_base * w_cmd) / max(args.wheel_radius, 1e-6)
-    action = np.array([dq_l, dq_r], dtype=np.float32)
+    action = diff_drive_inverse(
+        v=float(v_cmd),
+        w=float(w_cmd),
+        wheel_radius=float(args.wheel_radius),
+        wheel_base=float(args.wheel_base),
+        drive_sign=float(args.drive_sign),
+    ).astype(np.float32)
     action = np.clip(action, ctrl_low, ctrl_high)
 
     alpha = float(np.clip(args.expert_action_smoothing, 0.0, 1.0))
@@ -375,6 +386,14 @@ def init_storage(
         "imu_gyro": np.zeros((total_steps, 3), dtype=np.float32),
         "touch_front_force": np.zeros((total_steps,), dtype=np.float32),
         "lidar_triplet": np.zeros((total_steps, 3), dtype=np.float32),
+        "goal_rel_body": np.zeros((total_steps, 2), dtype=np.float32),
+        "goal_dist": np.zeros((total_steps,), dtype=np.float32),
+        "goal_heading_err": np.zeros((total_steps,), dtype=np.float32),
+        "depth_sector_min": np.zeros((total_steps, 3), dtype=np.float32),
+        "front_clearance": np.zeros((total_steps,), dtype=np.float32),
+        "corridor_width": np.zeros((total_steps,), dtype=np.float32),
+        "sensor_collision_flag": np.zeros((total_steps,), dtype=np.float32),
+        "recover_trigger": np.zeros((total_steps,), dtype=np.uint8),
         "base_pos_gt": np.zeros((total_steps, 3), dtype=np.float32),
         "base_quat_gt": np.zeros((total_steps, 4), dtype=np.float32),
         "base_linvel_gt": np.zeros((total_steps, 3), dtype=np.float32),
@@ -663,6 +682,26 @@ def collect_dataset(args: argparse.Namespace) -> None:
             for obs_i, sensor_name in enumerate(obs_sensor_names):
                 ds["obs_pos_gt"][index, obs_i] = sensor_value(model, data, sensor_name).astype(np.float32)
 
+            base_pos_now = ds["base_pos_gt"][index]
+            base_quat_now = ds["base_quat_gt"][index]
+            goal_pos_now = ds["goal_pos_gt"][index]
+            goal_vec = goal_pos_now[:2] - base_pos_now[:2]
+            yaw_now = quat_wxyz_to_yaw(base_quat_now)
+            c = np.cos(yaw_now)
+            s = np.sin(yaw_now)
+            goal_rel_x = c * goal_vec[0] + s * goal_vec[1]
+            goal_rel_y = -s * goal_vec[0] + c * goal_vec[1]
+            goal_rel = np.array([goal_rel_x, goal_rel_y], dtype=np.float32)
+            goal_dist = float(np.linalg.norm(goal_vec))
+            goal_heading_err = float(np.arctan2(goal_rel_y, goal_rel_x))
+            ds["goal_rel_body"][index] = goal_rel
+            ds["goal_dist"][index] = goal_dist
+            ds["goal_heading_err"][index] = goal_heading_err
+
+            depth_sector_min = ds["lidar_triplet"][index].astype(np.float32).copy()
+            invalid = ~np.isfinite(depth_sector_min) | (depth_sector_min <= 0.0)
+            depth_sector_min[invalid] = float(args.expert_default_far)
+
             if renderer is not None:
                 renderer.update_scene(data, camera=CAMERA_NAME)
                 renderer.enable_depth_rendering()
@@ -673,6 +712,43 @@ def collect_dataset(args: argparse.Namespace) -> None:
                 ds["depth_image"][index] = depth
                 ds["distance_image"][index] = distance
                 ds["depth_valid_mask"][index] = valid.astype(np.uint8)
+                if np.any(valid):
+                    cols = depth.shape[1]
+                    i0 = int(cols * 0.0)
+                    i1 = int(cols * (1.0 / 3.0))
+                    i2 = int(cols * (2.0 / 3.0))
+                    i3 = cols
+                    d_left = depth[:, i0:i1]
+                    d_front = depth[:, i1:i2]
+                    d_right = depth[:, i2:i3]
+                    if np.any(np.isfinite(d_left) & (d_left > 0.0)):
+                        depth_sector_min[0] = min(
+                            float(depth_sector_min[0]),
+                            float(np.nanmin(d_left[np.isfinite(d_left) & (d_left > 0.0)])),
+                        )
+                    if np.any(np.isfinite(d_front) & (d_front > 0.0)):
+                        depth_sector_min[1] = min(
+                            float(depth_sector_min[1]),
+                            float(np.nanmin(d_front[np.isfinite(d_front) & (d_front > 0.0)])),
+                        )
+                    if np.any(np.isfinite(d_right) & (d_right > 0.0)):
+                        depth_sector_min[2] = min(
+                            float(depth_sector_min[2]),
+                            float(np.nanmin(d_right[np.isfinite(d_right) & (d_right > 0.0)])),
+                        )
+
+            front_clear = float(depth_sector_min[1])
+            corridor_width = float(np.clip(depth_sector_min[0] + depth_sector_min[2], 0.0, 2.0 * args.expert_default_far))
+            coll_flag = float(1.0 if float(np.min(depth_sector_min)) < float(args.sensor_collision_threshold) else 0.0)
+            recover_flag = (
+                (float(ds["touch_front_force"][index]) > float(args.expert_touch_threshold))
+                or (front_clear < float(args.recover_front_threshold))
+            )
+            ds["depth_sector_min"][index] = depth_sector_min
+            ds["front_clearance"][index] = front_clear
+            ds["corridor_width"][index] = corridor_width
+            ds["sensor_collision_flag"][index] = coll_flag
+            ds["recover_trigger"][index] = np.uint8(1 if recover_flag else 0)
 
             index += 1
 
@@ -693,11 +769,19 @@ def collect_dataset(args: argparse.Namespace) -> None:
         "meta__ctrl_resample_prob": np.array([args.ctrl_resample_prob], dtype=np.float32),
         "meta__wheel_radius": np.array([args.wheel_radius], dtype=np.float32),
         "meta__wheel_base": np.array([args.wheel_base], dtype=np.float32),
+        "meta__state_convention_version": np.array([STATE_CONVENTION_VERSION], dtype=object),
+        "meta__drive_sign": np.array([args.drive_sign], dtype=np.float32),
+        "meta__pose_source": np.array([args.pose_source], dtype=object),
+        "meta__heading_source": np.array([args.heading_source], dtype=object),
+        "meta__yaw_source": np.array([args.yaw_source], dtype=object),
+        "meta__control_definition": np.array([CONTROL_DEFINITION], dtype=object),
         "meta__expert_k_v": np.array([args.expert_k_v], dtype=np.float32),
         "meta__expert_k_heading": np.array([args.expert_k_heading], dtype=np.float32),
         "meta__expert_k_obs": np.array([args.expert_k_obs], dtype=np.float32),
         "meta__expert_v_max": np.array([args.expert_v_max], dtype=np.float32),
         "meta__expert_w_max": np.array([args.expert_w_max], dtype=np.float32),
+        "meta__sensor_collision_threshold": np.array([args.sensor_collision_threshold], dtype=np.float32),
+        "meta__recover_front_threshold": np.array([args.recover_front_threshold], dtype=np.float32),
         "meta__min_active_obstacles": np.array([args.min_active_obstacles], dtype=np.int32),
         "meta__max_active_obstacles": np.array([args.max_active_obstacles], dtype=np.int32),
         "meta__obs_size_xy_scale_range": np.array(args.obs_size_xy_scale_range, dtype=np.float32),
@@ -736,6 +820,14 @@ def collect_dataset(args: argparse.Namespace) -> None:
         "raw__imu_gyro": ds["imu_gyro"],
         "raw__touch_front_force": ds["touch_front_force"],
         "raw__lidar_triplet": ds["lidar_triplet"],
+        "raw__goal_rel_body": ds["goal_rel_body"],
+        "raw__goal_dist": ds["goal_dist"],
+        "raw__goal_heading_err": ds["goal_heading_err"],
+        "raw__depth_sector_min": ds["depth_sector_min"],
+        "raw__front_clearance": ds["front_clearance"],
+        "raw__corridor_width": ds["corridor_width"],
+        "raw__sensor_collision_flag": ds["sensor_collision_flag"],
+        "raw__recover_trigger": ds["recover_trigger"],
         "gt__base_pos_gt": ds["base_pos_gt"],
         "gt__base_quat_gt": ds["base_quat_gt"],
         "gt__base_linvel_gt": ds["base_linvel_gt"],
@@ -749,6 +841,14 @@ def collect_dataset(args: argparse.Namespace) -> None:
     }
     for obs_i, sensor_name in enumerate(obs_sensor_names):
         save_dict[f"gt__{sensor_name}"] = ds["obs_pos_gt"][:, obs_i]
+    save_dict.update(
+        convention_as_meta(
+            drive_sign=float(args.drive_sign),
+            pose_source=str(args.pose_source),
+            heading_source=str(args.heading_source),
+            yaw_source=str(args.yaw_source),
+        )
+    )
 
     if renderer is not None:
         save_dict["raw__depth_image"] = ds["depth_image"]
@@ -785,6 +885,10 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--ctrl-resample-prob", type=float, default=0.12)
     parser.add_argument("--wheel-radius", type=float, default=0.085)
     parser.add_argument("--wheel-base", type=float, default=0.37)
+    parser.add_argument("--drive-sign", type=float, default=-1.0)
+    parser.add_argument("--pose-source", type=str, default="odom")
+    parser.add_argument("--heading-source", type=str, default="base")
+    parser.add_argument("--yaw-source", type=str, default="odom_yaw")
     parser.add_argument("--expert-default-far", type=float, default=10.0)
     parser.add_argument("--expert-k-v", type=float, default=0.9)
     parser.add_argument("--expert-k-heading", type=float, default=2.5)
@@ -800,6 +904,8 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--expert-touch-backoff-speed", type=float, default=-0.22)
     parser.add_argument("--expert-touch-turn-rate", type=float, default=2.2)
     parser.add_argument("--expert-action-smoothing", type=float, default=0.45)
+    parser.add_argument("--sensor-collision-threshold", type=float, default=0.30)
+    parser.add_argument("--recover-front-threshold", type=float, default=0.25)
 
     parser.add_argument("--scene-layout-attempts", type=int, default=120)
     parser.add_argument("--scene-sample-attempts", type=int, default=180)
@@ -854,4 +960,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
-    collect_dataset(build_argparser().parse_args())
+    args = build_argparser().parse_args()
+    args.drive_sign = canonical_drive_sign(args.drive_sign)
+    collect_dataset(args)

@@ -1,81 +1,96 @@
 import argparse
 import time
+from collections import deque
 from pathlib import Path
 
 import mujoco.viewer
 import numpy as np
 import torch
 
+from depth_consistency_gate import DepthConsistencyGate
 from env_mujoco import E1RobotEnv
+from local_occupancy_map import LocalOccupancyMap
 from mppi import DiffDriveKinematicModel, MPPIController
 from mppi_nav_utils import (
     build_reference_traj_from_path,
+    compute_boundary_recover_target,
     compute_path_remaining,
     compute_auto_waypoint_with_side,
     line_signed_lateral,
     line_of_sight_blocked,
+    line_of_sight_blocked_confidence,
     plan_global_path_xy,
     point_segment_distance_and_t,
+    project_target_with_invariants,
     sample_obstacles_adaptive,
     select_path_lookahead_target,
 )
-from run_icode_mppi_e1_test import DEFAULT_XML, HybridDynamics, load_icode_checkpoint
+from run_icode_mppi_e1_test import (
+    DEFAULT_XML,
+    HybridDynamics,
+    _lidar_sector_min,
+    _lidar_triplet_from_scan,
+    _merge_obstacle_frames,
+    _sanitize_lidar_scan,
+    _render_depth_image,
+    _try_create_depth_renderer,
+    add_supervisor_args,
+    build_supervisor_config,
+    load_icode_checkpoint,
+)
+from obs_geometry import DepthRayModel, LidarRayModel, fuse_rays_to_hits_free
+from safety_supervisor import SafetySupervisor, SupervisorInput, SupervisorState
+from state_convention import (
+    STATE_CONVENTION_VERSION,
+    canonical_drive_sign,
+    diff_drive_forward,
+    diff_drive_inverse,
+    world_to_body as sc_world_to_body,
+)
 
 
 def _adaptive_profile(mode: str) -> dict:
     mode_u = str(mode).upper()
     table = {
         "OPEN": {
-            "w_goal": 1.00,
-            "w_collision": 1.00,
-            "w_near_obs": 1.00,
-            "w_path_track": 1.00,
-            "w_path_progress": 1.00,
-            "w_smooth": 1.00,
-            "w_terminal_stop": 1.00,
-            "w_path_backtrack": 1.00,
-            "w_goal_motion_away": 1.00,
-            "w_reverse_away": 1.00,
+            "cost_task_goal": 1.00,
+            "cost_safe_collision": 1.00,
+            "cost_safe_near": 1.00,
+            "cost_task_path_track": 1.00,
+            "cost_task_path_progress": 1.00,
+            "cost_ctrl_smooth": 1.00,
+            "cost_terminal_stop": 1.00,
             "noise_sigma": 1.00,
         },
         "TIGHT": {
-            "w_goal": 0.90,
-            "w_collision": 1.35,
-            "w_near_obs": 1.25,
-            "w_path_track": 1.25,
-            "w_path_progress": 1.05,
-            "w_smooth": 1.10,
-            "w_terminal_stop": 0.95,
-            "w_path_backtrack": 1.15,
-            "w_goal_motion_away": 1.10,
-            "w_reverse_away": 1.05,
+            "cost_task_goal": 0.90,
+            "cost_safe_collision": 1.35,
+            "cost_safe_near": 1.25,
+            "cost_task_path_track": 1.25,
+            "cost_task_path_progress": 1.05,
+            "cost_ctrl_smooth": 1.10,
+            "cost_terminal_stop": 0.95,
             "noise_sigma": 0.62,
         },
         "STUCK": {
-            "w_goal": 1.35,
-            "w_collision": 0.90,
-            "w_near_obs": 0.90,
-            "w_path_track": 1.15,
-            "w_path_progress": 1.45,
-            "w_smooth": 0.90,
-            "w_terminal_stop": 0.90,
-            "w_path_backtrack": 1.10,
-            "w_goal_motion_away": 1.25,
-            "w_reverse_away": 1.20,
+            "cost_task_goal": 1.35,
+            "cost_safe_collision": 0.90,
+            "cost_safe_near": 0.90,
+            "cost_task_path_track": 1.15,
+            "cost_task_path_progress": 1.45,
+            "cost_ctrl_smooth": 0.90,
+            "cost_terminal_stop": 0.90,
             "noise_sigma": 1.35,
         },
         "DOCK": {
-            "w_goal": 1.10,
-            "w_collision": 0.70,
-            "w_near_obs": 0.70,
-            "w_path_track": 0.90,
-            "w_path_progress": 1.10,
-            "w_smooth": 1.25,
-            "w_terminal_stop": 1.45,
-            "w_path_backtrack": 1.00,
-            "w_goal_motion_away": 1.10,
-            "w_reverse_away": 1.05,
-            "noise_sigma": 0.55,
+            "cost_task_goal": 1.05,
+            "cost_safe_collision": 1.15,
+            "cost_safe_near": 1.35,
+            "cost_task_path_track": 1.35,
+            "cost_task_path_progress": 0.95,
+            "cost_ctrl_smooth": 1.30,
+            "cost_terminal_stop": 1.60,
+            "noise_sigma": 0.42,
         },
     }
     return table.get(mode_u, table["OPEN"])
@@ -89,22 +104,30 @@ def _apply_adaptive_profile(
 ) -> None:
     a = float(np.clip(alpha, 0.0, 1.0))
     scalar_keys = (
-        "w_goal",
-        "w_collision",
-        "w_near_obs",
-        "w_path_track",
-        "w_path_progress",
-        "w_smooth",
-        "w_terminal_stop",
-        "w_path_backtrack",
-        "w_goal_motion_away",
-        "w_reverse_away",
+        "cost_task_goal",
+        "cost_safe_collision",
+        "cost_safe_near",
+        "cost_safe_corridor",
+        "cost_task_path_track",
+        "cost_task_path_progress",
+        "cost_ctrl_smooth",
+        "cost_terminal_stop",
     )
     for k in scalar_keys:
         if hasattr(mppi, k) and k in base:
             tgt = float(base[k]) * float(profile.get(k, 1.0))
             cur = float(getattr(mppi, k))
             setattr(mppi, k, (1.0 - a) * cur + a * tgt)
+
+    mppi.w_goal = float(mppi.cost_task_goal)
+    mppi.w_collision = float(mppi.cost_safe_collision)
+    mppi.w_near_obs = float(mppi.cost_safe_near)
+    if hasattr(mppi, "cost_safe_corridor"):
+        mppi.w_corridor = float(mppi.cost_safe_corridor)
+    mppi.w_path_track = float(mppi.cost_task_path_track)
+    mppi.w_path_progress = float(mppi.cost_task_path_progress)
+    mppi.w_smooth = float(mppi.cost_ctrl_smooth)
+    mppi.w_terminal_stop = float(mppi.cost_terminal_stop)
 
     if "noise_sigma" in base and hasattr(mppi, "noise_sigma"):
         noise_scale = float(max(0.25, profile.get("noise_sigma", 1.0)))
@@ -122,7 +145,9 @@ def build_argparser() -> argparse.ArgumentParser:
         default=Path("/home/wmh/ICODE/domo/ICODE_MPPI/runs/icode_e1_mix_stageB/icode_best.pt"),
     )
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--planner-model", type=str, default="hybrid", choices=("icode", "kinematic", "hybrid"))
+    parser.add_argument("--planner-model", type=str, default="kinematic", choices=("icode", "kinematic", "hybrid"))
+    parser.add_argument("--kinematic-lock", action="store_true", default=True)
+    parser.add_argument("--no-kinematic-lock", action="store_false", dest="kinematic_lock")
     parser.add_argument("--seed", type=int, default=20260313)
 
     parser.add_argument("--num-samples", type=int, default=900)
@@ -131,43 +156,66 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--noise-sigma", type=float, nargs=2, default=(1.6, 1.6))
     parser.add_argument("--noise-rho", type=float, default=0.82)
     parser.add_argument("--u-init", type=float, nargs=2, default=(0.0, 0.0))
-    parser.add_argument("--w-goal", type=float, default=2.8)
-    parser.add_argument("--w-final", type=float, default=140.0)
-    parser.add_argument("--w-progress", type=float, default=90.0)
-    parser.add_argument("--w-control", type=float, default=0.01)
-    parser.add_argument("--w-smooth", type=float, default=0.08)
-    parser.add_argument("--w-spin", type=float, default=0.08)
-    parser.add_argument("--w-collision", type=float, default=1500.0)
-    parser.add_argument("--w-near-obs", type=float, default=1.2)
-    parser.add_argument("--w-heading", type=float, default=8.0)
-    parser.add_argument("--w-reverse", type=float, default=2.5)
-    parser.add_argument("--w-away-goal", type=float, default=45.0)
-    parser.add_argument("--w-goal-visibility", type=float, default=6.0)
-    parser.add_argument("--w-near-goal-stall", type=float, default=55.0)
+    parser.add_argument("--cost-task-goal", type=float, default=2.8)
+    parser.add_argument("--cost-task-final", type=float, default=140.0)
+    parser.add_argument("--cost-task-progress", type=float, default=120.0)
+    parser.add_argument("--cost-task-heading", type=float, default=8.0)
+    parser.add_argument("--cost-task-reverse", type=float, default=5.0)
+    parser.add_argument("--cost-task-path-track", type=float, default=10.0)
+    parser.add_argument("--cost-task-path-terminal", type=float, default=40.0)
+    parser.add_argument("--cost-task-path-progress", type=float, default=120.0)
+    parser.add_argument("--cost-task-lateral", type=float, default=1.2)
+    parser.add_argument("--cost-task-goal-visibility", type=float, default=6.0)
+    parser.add_argument("--cost-safe-collision", type=float, default=1500.0)
+    parser.add_argument("--cost-safe-near", type=float, default=0.6)
+    parser.add_argument("--cost-safe-corridor", type=float, default=120.0)
+    parser.add_argument("--cost-safe-bounds", type=float, default=120.0)
+    parser.add_argument("--cost-safe-bounds-terminal", type=float, default=260.0)
+    parser.add_argument("--cost-ctrl-effort", type=float, default=0.01)
+    parser.add_argument("--cost-ctrl-smooth", type=float, default=0.08)
+    parser.add_argument("--cost-ctrl-spin", type=float, default=0.08)
+    parser.add_argument("--cost-ctrl-wheel-diff", type=float, default=0.02)
+    parser.add_argument("--cost-terminal-progress-deficit", type=float, default=120.0)
+    parser.add_argument("--cost-terminal-near-goal-stall", type=float, default=55.0)
+    parser.add_argument("--cost-terminal-stop", type=float, default=120.0)
+    parser.add_argument("--cost-terminal-overshoot", type=float, default=140.0)
     parser.add_argument("--near-goal-radius", type=float, default=0.90)
     parser.add_argument("--near-goal-progress-eps", type=float, default=0.003)
     parser.add_argument("--los-margin", type=float, default=0.10)
     parser.add_argument("--obs-behind-scale", type=float, default=0.25)
-    parser.add_argument("--v-forward-sign", type=float, default=1.0)
+    parser.add_argument("--v-forward-sign", type=float, default=-1.0)
     parser.add_argument("--icode-blend-alpha", type=float, default=0.35)
+    parser.add_argument("--icode-diverge-fallback", action="store_true", default=True)
+    parser.add_argument("--no-icode-diverge-fallback", action="store_false", dest="icode_diverge_fallback")
+    parser.add_argument("--icode-diverge-window", type=int, default=45)
+    parser.add_argument("--icode-diverge-min-step", type=int, default=30)
+    parser.add_argument("--icode-diverge-min-increase", type=float, default=0.35)
+    parser.add_argument("--icode-fallback-alpha", type=float, default=0.15)
     parser.add_argument("--robot-radius", type=float, default=0.28)
     parser.add_argument("--obs-margin", type=float, default=0.25)
-    parser.add_argument("--collision-touch-threshold", type=float, default=1e-5)
-    parser.add_argument("--warmup-steps", type=int, default=35)
-    parser.add_argument("--warmup-min-scale", type=float, default=0.12)
-    parser.add_argument("--action-ema-alpha", type=float, default=0.75)
-    parser.add_argument("--max-delta-u", type=float, default=0.6)
-    parser.add_argument("--startup-no-reverse-steps", type=int, default=0)
-    parser.add_argument("--startup-min-u", type=float, default=0.0)
-    parser.add_argument("--emergency-clearance", type=float, default=0.12)
-    parser.add_argument("--recover-stop-steps", type=int, default=10)
-    parser.add_argument("--recover-rotate-steps", type=int, default=22)
-    parser.add_argument("--recover-forward-steps", type=int, default=20)
-    parser.add_argument("--recover-turn-rate", type=float, default=2.2)
-    parser.add_argument("--recover-forward-speed", type=float, default=0.20)
-    parser.add_argument("--recover-forward-turn-rate", type=float, default=0.55)
-    parser.add_argument("--progress-window", type=int, default=35)
-    parser.add_argument("--progress-min-delta", type=float, default=0.08)
+    parser.add_argument("--near-penalty-clearance", type=float, default=0.20)
+    parser.add_argument("--near-penalty-mid-clearance", type=float, default=0.34)
+    parser.add_argument("--near-penalty-hard-clearance", type=float, default=0.15)
+    parser.add_argument("--near-penalty-mid-scale", type=float, default=0.06)
+    parser.add_argument("--near-penalty-hard-scale", type=float, default=0.55)
+    parser.add_argument("--near-penalty-hard-power", type=float, default=3.2)
+    parser.add_argument("--path-corridor-half-width", type=float, default=0.34)
+    parser.add_argument("--max-delta-u", type=float, default=0.80)
+    parser.add_argument("--action-post-delta-eps", type=float, default=1e-4)
+    parser.add_argument("--nominal-forward-only", action="store_true", default=True)
+    parser.add_argument("--no-nominal-forward-only", action="store_false", dest="nominal_forward_only")
+    parser.add_argument("--nominal-min-forward-speed", type=float, default=0.07)
+    parser.add_argument("--nav-min-forward-speed", type=float, default=0.07)
+    parser.add_argument("--nav-speed-max", type=float, default=2.0)
+    parser.add_argument("--terminal-min-forward-speed", type=float, default=0.0)
+    parser.add_argument("--terminal-speed-max", type=float, default=0.55)
+    parser.add_argument("--speed-cap-clearance-hard", type=float, default=0.10)
+    parser.add_argument("--speed-cap-clearance-soft", type=float, default=0.40)
+    parser.add_argument("--speed-cap-heading-gate", type=float, default=0.95)
+    parser.add_argument("--speed-cap-heading-min-gain", type=float, default=0.20)
+    parser.add_argument("--terminal-mppi-enter-radius", type=float, default=0.65)
+    parser.add_argument("--terminal-profile-alpha", type=float, default=0.10)
+    add_supervisor_args(parser)
     parser.add_argument("--adaptive-scheduler", action="store_true")
     parser.add_argument("--adaptive-ema", type=float, default=0.18)
     parser.add_argument("--adaptive-mode-min-steps", type=int, default=14)
@@ -177,37 +225,72 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--adaptive-osc-window", type=int, default=10)
     parser.add_argument("--adaptive-osc-threshold", type=float, default=2.6)
     parser.add_argument("--adaptive-dock-radius", type=float, default=0.75)
-    parser.add_argument("--goal-slowdown-radius", type=float, default=1.8)
-    parser.add_argument("--goal-slowdown-min-scale", type=float, default=0.08)
-    parser.add_argument("--w-terminal-stop", type=float, default=120.0)
     parser.add_argument("--terminal-stop-radius", type=float, default=0.70)
-    parser.add_argument("--w-overshoot", type=float, default=140.0)
     parser.add_argument("--overshoot-tolerance", type=float, default=0.05)
     parser.add_argument("--noise-anneal-dist", type=float, default=1.8)
     parser.add_argument("--noise-anneal-min-scale", type=float, default=0.30)
-    parser.add_argument("--w-path-track", type=float, default=14.0)
-    parser.add_argument("--w-path-terminal", type=float, default=40.0)
-    parser.add_argument("--w-path-progress", type=float, default=90.0)
-    parser.add_argument("--w-path-backtrack", type=float, default=180.0)
-    parser.add_argument("--w-goal-motion-away", type=float, default=220.0)
-    parser.add_argument("--w-reverse-away", type=float, default=160.0)
-    parser.add_argument("--w-bounds", type=float, default=120.0)
-    parser.add_argument("--w-bounds-terminal", type=float, default=260.0)
     parser.add_argument("--bounds-x-range", type=float, nargs=2, default=(-0.8, 3.2))
     parser.add_argument("--bounds-y-range", type=float, nargs=2, default=(-2.0, 2.0))
-    parser.add_argument("--bounds-hard-margin", type=float, default=0.35)
+    parser.add_argument("--boundary-recover-guide-steps", type=int, default=40)
 
     parser.add_argument("--wheel-radius", type=float, default=0.085)
     parser.add_argument("--wheel-base", type=float, default=0.37)
     parser.add_argument("--yaw-blend-alpha", type=float, default=0.35)
     parser.add_argument("--control-decimation", type=int, default=10)
-    parser.add_argument("--pose-source", type=str, default="gt", choices=("gt", "odom"))
+    parser.add_argument("--pose-source", type=str, default="odom", choices=("gt", "odom"))
+    parser.add_argument("--oracle-mode", action="store_true", help="Use GT pose/obstacles for planning (legacy baseline).")
+    parser.add_argument("--sensor-use-depth", action="store_true", default=False)
+    parser.add_argument("--no-sensor-use-depth", action="store_false", dest="sensor_use_depth")
+    parser.add_argument("--depth-required", action="store_true", default=False)
+    parser.add_argument("--depth-camera", type=str, default="front_depth_cam")
+    parser.add_argument("--depth-width", type=int, default=160)
+    parser.add_argument("--depth-height", type=int, default=120)
+    parser.add_argument("--sensor-default-far", type=float, default=6.0)
+    parser.add_argument("--sensor-collision-threshold", type=float, default=0.30)
+    parser.add_argument("--sensor-obs-radius", type=float, default=0.12)
+    parser.add_argument("--sensor-obs-max-range", type=float, default=3.0)
+    parser.add_argument("--sensor-obs-min-range", type=float, default=0.12)
+    parser.add_argument("--sensor-depth-max-points", type=int, default=20)
+    parser.add_argument("--sensor-depth-hfov-deg", type=float, default=86.0)
+    parser.add_argument("--depth-min-valid", type=float, default=0.10)
+    parser.add_argument("--sensor-obs-memory-steps", type=int, default=5)
+    parser.add_argument("--sensor-obs-memory-max-points", type=int, default=96)
+    parser.add_argument("--depth-filter-window", type=int, default=3)
+    parser.add_argument("--depth-front-ema-alpha", type=float, default=0.6)
+    parser.add_argument("--front-guide-fov-deg", type=float, default=110.0)
+    parser.add_argument("--front-guide-min-x", type=float, default=0.02)
+    parser.add_argument("--front-guide-hold-steps", type=int, default=3)
+    parser.add_argument("--front-guide-max-points", type=int, default=64)
+    parser.add_argument("--front-guide-fallback-all", action="store_true", default=True)
+    parser.add_argument("--no-front-guide-fallback-all", action="store_false", dest="front_guide_fallback_all")
+    parser.add_argument("--guide-obs-radius-scale", type=float, default=1.00)
+    parser.add_argument("--guide-obs-radius-min", type=float, default=0.12)
+    parser.add_argument("--sensor-guide-robot-radius", type=float, default=0.20)
+    parser.add_argument("--sensor-guide-inflate-margin", type=float, default=0.02)
+    parser.add_argument("--sensor-goal-los-margin", type=float, default=0.0)
+    parser.add_argument("--sensor-waypoint-margin", type=float, default=0.06)
+    parser.add_argument("--map-resolution", type=float, default=0.05)
+    parser.add_argument("--map-x-range", type=float, nargs=2, default=(-1.0, 4.0))
+    parser.add_argument("--map-y-range", type=float, nargs=2, default=(-2.0, 2.0))
+    parser.add_argument("--map-occ-threshold", type=float, default=0.35)
+    parser.add_argument("--map-observed-threshold", type=float, default=0.15)
+    parser.add_argument("--map-min-cluster-cells", type=int, default=2)
+    parser.add_argument("--map-max-obstacles", type=int, default=96)
+    parser.add_argument("--goal-blocked-enter-conf", type=float, default=0.65)
+    parser.add_argument("--goal-blocked-exit-conf", type=float, default=0.35)
+    parser.add_argument("--goal-blocked-enter-steps", type=int, default=3)
+    parser.add_argument("--goal-blocked-exit-steps", type=int, default=5)
+    parser.add_argument("--depth-gate-window", type=int, default=20)
+    parser.add_argument("--depth-gate-min-valid-ratio", type=float, default=0.015)
+    parser.add_argument("--depth-gate-max-sector-delta", type=float, default=0.70)
+    parser.add_argument("--depth-gate-max-front-delta", type=float, default=1.10)
+    parser.add_argument("--depth-gate-max-fail-ratio", type=float, default=0.55)
 
     parser.add_argument("--max-steps", type=int, default=1500)
     parser.add_argument("--goal-tol", type=float, default=0.35)
     parser.add_argument("--target-x", type=float, default=None)
     parser.add_argument("--target-y", type=float, default=None)
-    parser.add_argument("--target-forward-m", type=float, default=2.5)
+    parser.add_argument("--target-forward-m", type=float, default=0.0)
     parser.add_argument("--random-obstacles", action="store_true")
     parser.add_argument("--scene-seed", type=int, default=-1)
     parser.add_argument("--scene-sample-attempts", type=int, default=800)
@@ -238,16 +321,28 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-waypoint", action="store_true")
     parser.add_argument("--global-guide", action="store_true", default=True)
     parser.add_argument("--no-global-guide", action="store_false", dest="global_guide")
-    parser.add_argument("--guide-replan-interval", type=int, default=8)
+    parser.add_argument("--guide-replan-interval", type=int, default=14)
     parser.add_argument("--guide-lookahead", type=float, default=0.9)
     parser.add_argument("--guide-ref-step-m", type=float, default=0.09)
     parser.add_argument("--guide-max-grid-cells", type=int, default=240000)
     parser.add_argument("--goal-direct-on-clear", action="store_true", default=True)
     parser.add_argument("--no-goal-direct-on-clear", action="store_false", dest="goal_direct_on_clear")
-    parser.add_argument("--goal-direct-clear-steps", type=int, default=10)
-    parser.add_argument("--goal-direct-dist", type=float, default=2.2)
+    parser.add_argument("--goal-direct-clear-steps", type=int, default=18)
+    parser.add_argument("--goal-direct-dist", type=float, default=1.6)
+    parser.add_argument("--sensor-goal-direct-dist", type=float, default=0.9)
+    parser.add_argument("--sensor-strict-path", action="store_true", default=True)
+    parser.add_argument("--no-sensor-strict-path", action="store_false", dest="sensor_strict_path")
+    parser.add_argument("--goal-direct-yaw-max", type=float, default=0.75)
+    parser.add_argument("--goal-direct-lateral-max", type=float, default=0.30)
     parser.add_argument("--corridor-commit", action="store_true", default=True)
     parser.add_argument("--no-corridor-commit", action="store_false", dest="corridor_commit")
+    parser.add_argument("--target-bound-margin", type=float, default=0.10)
+    parser.add_argument("--corridor-target-slack", type=float, default=0.18)
+    parser.add_argument("--corridor-tight-clearance", type=float, default=0.36)
+    parser.add_argument("--corridor-tight-max-dev", type=float, default=0.32)
+    parser.add_argument("--target-jump-max", type=float, default=0.62)
+    parser.add_argument("--target-jump-min", type=float, default=0.18)
+    parser.add_argument("--guide-backtrack-max", type=int, default=0)
     parser.add_argument("--commit-latch-steps", type=int, default=80)
     parser.add_argument("--commit-release-progress", type=float, default=0.35)
     parser.add_argument("--commit-lateral-bias", type=float, default=0.22)
@@ -256,18 +351,31 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--commit-stuck-min-progress", type=float, default=0.05)
     parser.add_argument("--waypoint-use-los-gating", action="store_true", default=True)
     parser.add_argument("--no-waypoint-use-los-gating", action="store_false", dest="waypoint_use_los_gating")
-    parser.add_argument("--waypoint-replan-interval", type=int, default=10)
+    parser.add_argument("--waypoint-replan-interval", type=int, default=16)
     parser.add_argument("--waypoint-switch-radius", type=float, default=0.35)
-    parser.add_argument("--waypoint-clear-hysteresis-steps", type=int, default=8)
-    parser.add_argument("--waypoint-min-hold-steps", type=int, default=12)
+    parser.add_argument("--waypoint-clear-hysteresis-steps", type=int, default=14)
+    parser.add_argument("--waypoint-min-hold-steps", type=int, default=20)
     parser.add_argument("--waypoint-margin", type=float, default=0.12)
     parser.add_argument("--goal-los-margin", type=float, default=0.02)
     parser.add_argument("--waypoint-lateral-extra", type=float, default=0.28)
+    parser.add_argument("--waypoint-max-lateral", type=float, default=0.60)
+    parser.add_argument("--waypoint-min-forward", type=float, default=0.20)
+    parser.add_argument("--waypoint-max-forward", type=float, default=1.20)
     parser.add_argument("--waypoint-stuck-window", type=int, default=40)
     parser.add_argument("--waypoint-stuck-min-progress", type=float, default=0.08)
     parser.add_argument("--waypoint-stuck-cooldown", type=int, default=20)
+    parser.add_argument("--waypoint-stuck-force-latch-steps", type=int, default=120)
+    parser.add_argument("--waypoint-force-max-level", type=int, default=3)
+    parser.add_argument("--waypoint-force-lateral-boost", type=float, default=0.20)
+    parser.add_argument("--waypoint-force-forward-boost", type=float, default=0.35)
     parser.add_argument("--waypoint-stuck-flip-side", action="store_true", default=True)
     parser.add_argument("--no-waypoint-stuck-flip-side", action="store_false", dest="waypoint_stuck_flip_side")
+    parser.add_argument("--blocked-force-waypoint-enable", action="store_true", default=True)
+    parser.add_argument("--no-blocked-force-waypoint-enable", action="store_false", dest="blocked_force_waypoint_enable")
+    parser.add_argument("--blocked-force-waypoint-window", type=int, default=18)
+    parser.add_argument("--blocked-force-waypoint-min-progress", type=float, default=0.03)
+    parser.add_argument("--blocked-force-waypoint-clearance", type=float, default=0.40)
+    parser.add_argument("--blocked-force-waypoint-latch-steps", type=int, default=80)
     parser.add_argument("--init-x", type=float, default=None)
     parser.add_argument("--init-y", type=float, default=None)
     parser.add_argument("--init-yaw", type=float, default=None)
@@ -280,7 +388,13 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--dock-v-eps", type=float, default=0.08)
     parser.add_argument("--dock-w-eps", type=float, default=0.25)
     parser.add_argument("--dock-hold-steps", type=int, default=20)
+    parser.add_argument("--dock-align-yaw-enter", type=float, default=0.55)
+    parser.add_argument("--dock-align-lateral-enter", type=float, default=0.30)
+    parser.add_argument("--dock-align-yaw-exit", type=float, default=0.85)
+    parser.add_argument("--dock-align-lateral-exit", type=float, default=0.45)
     parser.add_argument("--print-interval", type=int, default=20)
+    parser.add_argument("--trace-control-chain", action="store_true", default=False)
+    parser.add_argument("--trace-every", type=int, default=1)
     parser.add_argument("--no-realtime", action="store_true")
     return parser
 
@@ -289,6 +403,17 @@ def main() -> None:
     args = build_argparser().parse_args()
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    args.v_forward_sign = canonical_drive_sign(args.v_forward_sign)
+    if args.kinematic_lock and args.planner_model != "kinematic":
+        raise ValueError(
+            f"kinematic_lock is enabled; planner-model must be 'kinematic', got: {args.planner_model}"
+        )
+    prediction_model = "kinematic_locked" if args.kinematic_lock else str(args.planner_model)
+    print(
+        f"[config] prediction_model={prediction_model}, "
+        f"state_convention={STATE_CONVENTION_VERSION}, "
+        f"drive_sign={args.v_forward_sign:+.0f}, depth_main_chain={bool(args.sensor_use_depth)}"
+    )
 
     device = torch.device(args.device)
     kin_model = DiffDriveKinematicModel(
@@ -300,10 +425,18 @@ def main() -> None:
         drive_sign=args.v_forward_sign,
     ).to(device)
     kin_model.eval()
+    icode_model = None
+    hybrid_fallback_model = None
     if args.planner_model == "kinematic":
         model = kin_model
     else:
         icode_model = load_icode_checkpoint(args.checkpoint, device=device)
+        hybrid_fallback_model = HybridDynamics(
+            icode_model=icode_model,
+            kin_model=kin_model,
+            alpha=float(args.icode_fallback_alpha),
+        ).to(device)
+        hybrid_fallback_model.eval()
         if args.planner_model == "hybrid" or args.icode_blend_alpha < 0.999:
             model = HybridDynamics(icode_model=icode_model, kin_model=kin_model, alpha=args.icode_blend_alpha).to(device)
             model.eval()
@@ -314,10 +447,11 @@ def main() -> None:
         xml_path=str(args.xml),
         wheel_radius=args.wheel_radius,
         wheel_base=args.wheel_base,
+        drive_sign=args.v_forward_sign,
         yaw_blend_alpha=args.yaw_blend_alpha,
         control_decimation=args.control_decimation,
         pose_source=args.pose_source,
-        heading_source="camera",
+        heading_source="base",
     )
     mppi = MPPIController(
         dynamics_model=model,
@@ -331,56 +465,60 @@ def main() -> None:
         action_low=env.ctrl_low,
         action_high=env.ctrl_high,
         device=str(device),
-        w_goal=args.w_goal,
-        w_final=args.w_final,
-        w_progress=args.w_progress,
-        w_control=args.w_control,
-        w_smooth=args.w_smooth,
-        w_spin=args.w_spin,
-        w_collision=args.w_collision,
-        w_near_obs=args.w_near_obs,
-        w_heading=args.w_heading,
-        w_reverse=args.w_reverse,
-        w_away_goal=args.w_away_goal,
+        cost_task_goal=args.cost_task_goal,
+        cost_task_final=args.cost_task_final,
+        cost_task_progress=args.cost_task_progress,
+        cost_task_heading=args.cost_task_heading,
+        cost_task_reverse=args.cost_task_reverse,
+        cost_task_path_track=args.cost_task_path_track,
+        cost_task_path_terminal=args.cost_task_path_terminal,
+        cost_task_path_progress=args.cost_task_path_progress,
+        cost_task_lateral=args.cost_task_lateral,
+        cost_task_goal_visibility=args.cost_task_goal_visibility,
+        cost_safe_collision=args.cost_safe_collision,
+        cost_safe_near=args.cost_safe_near,
+        cost_safe_corridor=args.cost_safe_corridor,
+        cost_safe_bounds=args.cost_safe_bounds,
+        cost_safe_bounds_terminal=args.cost_safe_bounds_terminal,
+        cost_ctrl_effort=args.cost_ctrl_effort,
+        cost_ctrl_smooth=args.cost_ctrl_smooth,
+        cost_ctrl_spin=args.cost_ctrl_spin,
+        cost_ctrl_wheel_diff=args.cost_ctrl_wheel_diff,
+        cost_terminal_progress_deficit=args.cost_terminal_progress_deficit,
+        cost_terminal_near_goal_stall=args.cost_terminal_near_goal_stall,
+        cost_terminal_stop=args.cost_terminal_stop,
+        cost_terminal_overshoot=args.cost_terminal_overshoot,
         obs_behind_scale=args.obs_behind_scale,
-        v_forward_sign=args.v_forward_sign,
         robot_radius=args.robot_radius,
         obs_margin=args.obs_margin,
-        w_goal_visibility=args.w_goal_visibility,
-        w_near_goal_stall=args.w_near_goal_stall,
+        near_penalty_clearance=args.near_penalty_clearance,
+        near_penalty_mid_clearance=args.near_penalty_mid_clearance,
+        near_penalty_hard_clearance=args.near_penalty_hard_clearance,
+        near_penalty_mid_scale=args.near_penalty_mid_scale,
+        near_penalty_hard_scale=args.near_penalty_hard_scale,
+        near_penalty_hard_power=args.near_penalty_hard_power,
+        path_corridor_half_width=args.path_corridor_half_width,
         near_goal_radius=args.near_goal_radius,
         near_goal_progress_eps=args.near_goal_progress_eps,
         los_margin=args.los_margin,
-        w_terminal_stop=args.w_terminal_stop,
         terminal_stop_radius=args.terminal_stop_radius,
-        w_overshoot=args.w_overshoot,
         overshoot_tolerance=args.overshoot_tolerance,
         noise_anneal_dist=args.noise_anneal_dist,
         noise_anneal_min_scale=args.noise_anneal_min_scale,
-        w_path_track=args.w_path_track,
-        w_path_terminal=args.w_path_terminal,
-        w_path_progress=args.w_path_progress,
-        w_path_backtrack=args.w_path_backtrack,
-        w_goal_motion_away=args.w_goal_motion_away,
-        w_reverse_away=args.w_reverse_away,
-        w_bounds=args.w_bounds,
-        w_bounds_terminal=args.w_bounds_terminal,
         world_x_min=min(args.bounds_x_range[0], args.bounds_x_range[1]),
         world_x_max=max(args.bounds_x_range[0], args.bounds_x_range[1]),
         world_y_min=min(args.bounds_y_range[0], args.bounds_y_range[1]),
         world_y_max=max(args.bounds_y_range[0], args.bounds_y_range[1]),
     )
     adaptive_base = {
-        "w_goal": float(mppi.w_goal),
-        "w_collision": float(mppi.w_collision),
-        "w_near_obs": float(mppi.w_near_obs),
-        "w_path_track": float(mppi.w_path_track),
-        "w_path_progress": float(mppi.w_path_progress),
-        "w_smooth": float(mppi.w_smooth),
-        "w_terminal_stop": float(mppi.w_terminal_stop),
-        "w_path_backtrack": float(mppi.w_path_backtrack),
-        "w_goal_motion_away": float(mppi.w_goal_motion_away),
-        "w_reverse_away": float(mppi.w_reverse_away),
+        "cost_task_goal": float(mppi.cost_task_goal),
+        "cost_safe_collision": float(mppi.cost_safe_collision),
+        "cost_safe_near": float(mppi.cost_safe_near),
+        "cost_safe_corridor": float(getattr(mppi, "cost_safe_corridor", 0.0)),
+        "cost_task_path_track": float(mppi.cost_task_path_track),
+        "cost_task_path_progress": float(mppi.cost_task_path_progress),
+        "cost_ctrl_smooth": float(mppi.cost_ctrl_smooth),
+        "cost_terminal_stop": float(mppi.cost_terminal_stop),
         "noise_sigma": mppi.noise_sigma.detach().clone(),
     }
 
@@ -388,16 +526,17 @@ def main() -> None:
         state = env.reset_with_pose(x=args.init_x, y=args.init_y, yaw=args.init_yaw)
     else:
         state = env.reset()
-    base_xy0 = env.get_base_xy_gt()
+    base_xy0 = state[:2].astype(np.float32)
     yaw0 = float(state[2])
-    target_xy = env.get_goal_xy()
+    target_xy = env.get_goal_xy().astype(np.float32)
     if args.target_x is not None and args.target_y is not None:
         target_xy = np.array([args.target_x, args.target_y], dtype=np.float32)
         env.set_goal_xy(float(target_xy[0]), float(target_xy[1]))
     elif args.target_forward_m > 0.0:
         target_xy = base_xy0 + float(args.target_forward_m) * np.array([np.cos(yaw0), np.sin(yaw0)], dtype=np.float32)
         env.set_goal_xy(float(target_xy[0]), float(target_xy[1]))
-    obstacles = env.get_obstacles_xyr()
+    obstacles_gt = env.get_obstacles_xyr()
+    obstacles_nav = obstacles_gt.copy() if args.oracle_mode else np.zeros((0, 3), dtype=np.float32)
     random_scene_success = True
     scene_sampling_stage = 0
     if args.random_obstacles:
@@ -408,19 +547,19 @@ def main() -> None:
                 rr = rng_scene.uniform(
                     float(args.obs_radius_min),
                     float(args.obs_radius_max),
-                    size=(obstacles.shape[0],),
+                    size=(obstacles_gt.shape[0],),
                 ).astype(np.float32)
             else:
                 rr = np.clip(
-                    obstacles[:, 2],
+                    obstacles_gt[:, 2],
                     float(args.obs_radius_min),
                     float(args.obs_radius_max),
                 ).astype(np.float32)
             env.set_obstacles_radii(rr)
-            obstacles = env.get_obstacles_xyr()
+            obstacles_gt = env.get_obstacles_xyr()
         ok, sampled_obs, stage_idx = sample_obstacles_adaptive(
             rng=rng_scene,
-            base_obstacles_xyr=obstacles,
+            base_obstacles_xyr=obstacles_gt,
             start_xy=base_xy0.astype(np.float32),
             goal_xy=target_xy.astype(np.float32),
             obs_x_range=(float(args.obs_x_range[0]), float(args.obs_x_range[1])),
@@ -447,80 +586,156 @@ def main() -> None:
         scene_sampling_stage = int(stage_idx)
         if ok:
             env.set_obstacles_xy(sampled_obs[:, :2])
-            obstacles = env.get_obstacles_xyr()
+            obstacles_gt = env.get_obstacles_xyr()
+
+    if args.oracle_mode:
+        obstacles_nav = obstacles_gt.copy()
 
     tmin = float(min(args.blocker_t_range[0], args.blocker_t_range[1]))
     tmax = float(max(args.blocker_t_range[0], args.blocker_t_range[1]))
     line_blockers = 0
-    for i in range(obstacles.shape[0]):
-        dseg, tseg = point_segment_distance_and_t(base_xy0.astype(np.float32), target_xy.astype(np.float32), obstacles[i, :2])
-        r_eff = float(obstacles[i, 2] + args.robot_radius + args.scene_path_inflate_margin + args.blocker_extra_margin)
+    for i in range(obstacles_gt.shape[0]):
+        dseg, tseg = point_segment_distance_and_t(base_xy0.astype(np.float32), target_xy.astype(np.float32), obstacles_gt[i, :2])
+        r_eff = float(obstacles_gt[i, 2] + args.robot_radius + args.scene_path_inflate_margin + args.blocker_extra_margin)
         if tmin <= tseg <= tmax and dseg < r_eff:
             line_blockers += 1
 
     def world_to_body(vec_xy: np.ndarray, yaw: float) -> np.ndarray:
-        c = np.cos(yaw)
-        s = np.sin(yaw)
-        return np.array([c * vec_xy[0] + s * vec_xy[1], -s * vec_xy[0] + c * vec_xy[1]], dtype=np.float32)
+        return sc_world_to_body(np.asarray(vec_xy, dtype=np.float32), float(yaw))
 
     def diff_drive_to_wheels(v_cmd: float, w_cmd: float) -> np.ndarray:
-        dq_r = (v_cmd + 0.5 * args.wheel_base * w_cmd) / max(args.wheel_radius, 1e-6)
-        dq_l = (v_cmd - 0.5 * args.wheel_base * w_cmd) / max(args.wheel_radius, 1e-6)
-        return np.array([dq_l, dq_r], dtype=np.float32)
+        return diff_drive_inverse(
+            v=float(v_cmd),
+            w=float(w_cmd),
+            wheel_radius=float(args.wheel_radius),
+            wheel_base=float(args.wheel_base),
+            drive_sign=float(args.v_forward_sign),
+        ).astype(np.float32)
+
+    def project_forward_action(action_u: np.ndarray, min_v: float) -> tuple[np.ndarray, bool]:
+        u = np.asarray(action_u, dtype=np.float32).reshape(2)
+        vw = diff_drive_forward(
+            u=u,
+            wheel_radius=float(args.wheel_radius),
+            wheel_base=float(args.wheel_base),
+            drive_sign=float(args.v_forward_sign),
+        )
+        v_cmd = float(vw[0])
+        if v_cmd >= float(min_v):
+            return u.astype(np.float32), False
+        return diff_drive_to_wheels(v_cmd=float(min_v), w_cmd=float(vw[1])), True
+
+    def project_nominal_forward_action(action_u: np.ndarray, terminal_mode: bool = False) -> tuple[np.ndarray, bool]:
+        if not bool(args.nominal_forward_only):
+            return np.asarray(action_u, dtype=np.float32), False
+        if terminal_mode:
+            min_v = float(max(float(args.terminal_min_forward_speed), 0.0))
+        else:
+            min_v = float(max(float(args.nominal_min_forward_speed), float(args.nav_min_forward_speed), 0.0))
+        return project_forward_action(action_u=action_u, min_v=min_v)
+
+    def apply_semantic_speed_cap(
+        action_u: np.ndarray,
+        min_clearance: float,
+        heading_err_abs: float,
+        dist_goal: float,
+        terminal_mode: bool,
+    ) -> tuple[np.ndarray, bool, float]:
+        u = np.asarray(action_u, dtype=np.float32).reshape(2)
+        vw = diff_drive_forward(
+            u=u,
+            wheel_radius=float(args.wheel_radius),
+            wheel_base=float(args.wheel_base),
+            drive_sign=float(args.v_forward_sign),
+        )
+        v_cmd = float(vw[0])
+        w_cmd = float(vw[1])
+
+        if terminal_mode:
+            v_min = float(max(0.0, args.terminal_min_forward_speed))
+            v_base_max = float(max(v_min, args.terminal_speed_max))
+        else:
+            v_min = float(max(0.0, args.nav_min_forward_speed))
+            v_base_max = float(max(v_min, args.nav_speed_max))
+
+        c_hard = float(max(0.0, args.speed_cap_clearance_hard))
+        c_soft = float(max(c_hard + 1e-3, args.speed_cap_clearance_soft))
+        if np.isfinite(min_clearance):
+            clearance_gain = float(np.clip((min_clearance - c_hard) / max(c_soft - c_hard, 1e-6), 0.0, 1.0))
+        else:
+            clearance_gain = 1.0
+
+        h_gate = float(max(1e-3, args.speed_cap_heading_gate))
+        heading_gain = float(np.clip(1.0 - heading_err_abs / h_gate, args.speed_cap_heading_min_gain, 1.0))
+        v_max = v_min + (v_base_max - v_min) * (clearance_gain * heading_gain)
+
+        if terminal_mode:
+            enter = float(max(args.goal_tol + 1e-3, args.terminal_mppi_enter_radius))
+            dist_gain = float(np.clip((dist_goal - args.goal_tol) / max(enter - args.goal_tol, 1e-6), 0.0, 1.0))
+            v_max = v_min + (v_max - v_min) * dist_gain
+
+        if (v_cmd >= (v_min - 1e-6)) and (v_cmd <= (v_max + 1e-6)):
+            return u.astype(np.float32), False, float(v_max)
+
+        v_out = float(np.clip(v_cmd, v_min, v_max))
+        return diff_drive_to_wheels(v_cmd=v_out, w_cmd=w_cmd), True, float(v_max)
+
+    def dynamic_target_corridor_max_dev(min_clearance: float, terminal_mode: bool) -> float:
+        base_dev = float(max(0.05, args.path_corridor_half_width + args.corridor_target_slack))
+        tight_dev = float(np.clip(args.corridor_tight_max_dev, 0.04, base_dev))
+        trigger_clearance = float(max(0.05, args.corridor_tight_clearance))
+        if terminal_mode:
+            trigger_clearance = min(trigger_clearance, float(max(args.goal_tol + 0.05, args.terminal_mppi_enter_radius)))
+        if (not np.isfinite(min_clearance)) or min_clearance >= trigger_clearance:
+            return base_dev
+        k = float(np.clip(min_clearance / max(trigger_clearance, 1e-6), 0.0, 1.0))
+        return float(tight_dev + (base_dev - tight_dev) * k)
 
     def wrap_to_pi(a: float) -> float:
         return float((a + np.pi) % (2.0 * np.pi) - np.pi)
 
     def pick_turn_sign_from_nearest_obstacle(state_now: np.ndarray, base_xy_now: np.ndarray) -> float:
-        if obstacles.shape[0] <= 0:
+        if obstacles_nav.shape[0] <= 0:
             return 1.0
         yaw = float(state_now[2])
-        nearest_i = int(np.argmin(np.linalg.norm(obstacles[:, :2] - base_xy_now[None, :], axis=1)))
-        rel_world = obstacles[nearest_i, :2] - base_xy_now
+        nearest_i = int(np.argmin(np.linalg.norm(obstacles_nav[:, :2] - base_xy_now[None, :], axis=1)))
+        rel_world = obstacles_nav[nearest_i, :2] - base_xy_now
         rel_body = world_to_body(rel_world, yaw)
         return -1.0 if rel_body[1] > 0.0 else 1.0
 
-    def recover_action(mode: str, turn_sign: float) -> np.ndarray:
-        if mode == "STOP":
-            v_cmd = 0.0
-            w_cmd = 0.0
-        elif mode == "ROTATE":
-            v_cmd = 0.0
-            w_cmd = float(turn_sign) * float(args.recover_turn_rate)
-        else:  # FORWARD
-            v_cmd = float(args.recover_forward_speed)
-            w_cmd = float(turn_sign) * float(args.recover_forward_turn_rate)
-        u = diff_drive_to_wheels(v_cmd=v_cmd, w_cmd=w_cmd)
-        return np.clip(u, env.ctrl_low, env.ctrl_high).astype(np.float32)
+    def choose_turn_sign(
+        default_sign: float,
+        lidar_triplet: np.ndarray,
+        lidar_ranges: np.ndarray | None = None,
+        lidar_angles_deg: np.ndarray | None = None,
+    ) -> float:
+        s = float(default_sign)
+        if not args.oracle_mode:
+            used_full_scan = False
+            if lidar_ranges is not None and lidar_angles_deg is not None:
+                rr = np.asarray(lidar_ranges, dtype=np.float32).reshape(-1)
+                aa = np.asarray(lidar_angles_deg, dtype=np.float32).reshape(-1)
+                if rr.shape[0] > 0 and rr.shape[0] == aa.shape[0]:
+                    left_s, _, right_s, _ = _lidar_sector_min(
+                        ranges=rr,
+                        angles_deg=aa,
+                        default_far=float(args.sensor_default_far),
+                    )
+                    if np.isfinite(left_s) and np.isfinite(right_s) and abs(left_s - right_s) > 0.03:
+                        s = 1.0 if left_s > right_s else -1.0
+                        used_full_scan = True
+            if not used_full_scan:
+                lt = np.asarray(lidar_triplet, dtype=np.float32).reshape(-1)
+                if lt.shape[0] >= 3:
+                    left = float(lt[0])
+                    right = float(lt[2])
+                    if np.isfinite(left) and np.isfinite(right) and abs(left - right) > 0.03:
+                        s = 1.0 if left > right else -1.0
+        if s == 0.0:
+            s = 1.0
+        return s
 
-    def boundary_guard_action(state_now: np.ndarray, base_xy_now: np.ndarray) -> np.ndarray:
-        x_min = float(min(args.bounds_x_range[0], args.bounds_x_range[1]))
-        x_max = float(max(args.bounds_x_range[0], args.bounds_x_range[1]))
-        y_min = float(min(args.bounds_y_range[0], args.bounds_y_range[1]))
-        y_max = float(max(args.bounds_y_range[0], args.bounds_y_range[1]))
-        center_xy = np.array([(x_min + x_max) * 0.5, (y_min + y_max) * 0.5], dtype=np.float32)
-        yaw = float(state_now[2])
-        rel_body = world_to_body(center_xy - base_xy_now, yaw)
-        yaw_err = float(np.arctan2(rel_body[1], max(rel_body[0], 1e-6)))
-        if abs(yaw_err) > 0.35:
-            v_cmd = 0.0
-            w_cmd = float(np.sign(yaw_err)) * float(args.recover_turn_rate)
-        else:
-            v_cmd = float(args.recover_forward_speed)
-            w_cmd = 0.0
-        u = diff_drive_to_wheels(v_cmd=v_cmd, w_cmd=w_cmd)
-        return np.clip(u, env.ctrl_low, env.ctrl_high).astype(np.float32)
-
-    def dock_action(state_now: np.ndarray, base_xy_now: np.ndarray, goal_xy_now: np.ndarray) -> np.ndarray:
-        yaw = float(state_now[2])
-        dq_l = float(state_now[5]) if state_now.shape[0] > 5 else 0.0
-        dq_r = float(state_now[6]) if state_now.shape[0] > 6 else 0.0
-        goal_heading = float(np.arctan2(goal_xy_now[1] - base_xy_now[1], goal_xy_now[0] - base_xy_now[0]))
-        yaw_err = wrap_to_pi(goal_heading - yaw)
-        brake = -args.dock_k_brake * np.array([dq_l, dq_r], dtype=np.float32)
-        turn = args.dock_k_yaw * yaw_err
-        u = brake + np.array([-turn, +turn], dtype=np.float32)
-        return np.clip(u, env.ctrl_low, env.ctrl_high).astype(np.float32)
+    # Docking uses terminal MPPI semantics (weights + speed caps), not a separate control chain.
 
     ctrl_dt = env.model.opt.timestep * env.control_decimation
     goal_xy = target_xy.copy()
@@ -530,11 +745,23 @@ def main() -> None:
     waypoint_replans = 0
     waypoint_active_steps = 0
     waypoint_stuck_events = 0
+    waypoint_stuck_force_events = 0
+    force_waypoint_events = 0
+    force_waypoint_latch_steps = 0
+    blocked_goal_dist_buffer: deque[float] = deque(maxlen=max(2, int(args.blocked_force_waypoint_window)))
     goal_dist_buffer = []
     waypoint_stuck_cooldown = 0
     goal_los_clear_count = 0
     waypoint_hold_steps = 0
     goal_blocked_steps = 0
+    goal_blocked_state = False
+    goal_blocked_enter_count = 0
+    goal_blocked_exit_count = 0
+    goal_blocked_conf_hist: list[float] = []
+    target_bound_projected_steps = 0
+    target_corridor_projected_steps = 0
+    target_jump_projected_steps = 0
+    boundary_soft_steps = 0
     guide_path_xy = None
     guide_progress_idx = 0
     guide_replans = 0
@@ -547,8 +774,13 @@ def main() -> None:
     guide_commit_active_steps = 0
     guide_commit_flip_events = 0
     goal_direct_steps = 0
+    icode_fallback_triggered = False
+    diverge_dist_hist: deque[float] = deque(maxlen=max(2, int(args.icode_diverge_window)))
     nav_mode = "NAV"
     dock_hold_count = 0
+    current_nav_target = goal_xy.copy()
+    last_active_target_for_supervisor = current_nav_target.copy()
+    target_switched_recent = False
     print("Launching MuJoCo viewer...")
     print(f"target={target_xy.tolist()}, goal_tol={args.goal_tol}, ctrl_dt={ctrl_dt:.4f}s")
     print(
@@ -557,71 +789,456 @@ def main() -> None:
         f"global_guide={args.global_guide}, auto_waypoint={args.auto_waypoint}, "
         f"adaptive={args.adaptive_scheduler}"
     )
-    print(f"obstacles(x,y,r)=\n{np.array2string(obstacles, precision=3)}")
+    print(f"oracle_mode={args.oracle_mode}, sensor_depth={args.sensor_use_depth}")
+    print(f"obstacles(x,y,r)=\n{np.array2string(obstacles_gt, precision=3)}")
+
+    depth_renderer = None
+    if args.sensor_use_depth and (not args.oracle_mode):
+        depth_renderer = _try_create_depth_renderer(
+            model=env.model,
+            width=args.depth_width,
+            height=args.depth_height,
+        )
+    if args.depth_required and (not args.sensor_use_depth):
+        raise ValueError("--depth-required requires --sensor-use-depth.")
+    if args.depth_required and (not args.oracle_mode) and args.sensor_use_depth and depth_renderer is None:
+        raise RuntimeError("Depth is required but renderer initialization failed.")
+    depth_ray_model = DepthRayModel(
+        hfov_deg=float(args.sensor_depth_hfov_deg),
+        sample_count=max(7, int(args.sensor_depth_max_points)),
+    )
+    depth_gate = DepthConsistencyGate(
+        window=int(args.depth_gate_window),
+        min_valid_ratio=float(args.depth_gate_min_valid_ratio),
+        max_sector_delta_mean=float(args.depth_gate_max_sector_delta),
+        max_front_delta=float(args.depth_gate_max_front_delta),
+        max_fail_ratio=float(args.depth_gate_max_fail_ratio),
+    )
+    occ_map = LocalOccupancyMap(
+        x_range=(float(args.map_x_range[0]), float(args.map_x_range[1])),
+        y_range=(float(args.map_y_range[0]), float(args.map_y_range[1])),
+        resolution=float(args.map_resolution),
+    )
+
+    front_obs_memory: deque[np.ndarray] = deque(maxlen=max(1, int(args.front_guide_hold_steps)))
+    depth_sector_hist: deque[np.ndarray] = deque(maxlen=max(1, int(args.depth_filter_window)))
+    depth_front_ema = None
+    depth_gate_reason = "disabled"
+    depth_gate_drop_count = 0
+
+    def update_map_obstacles(
+        state_now: np.ndarray,
+        lidar_ranges: np.ndarray,
+        lidar_angles_deg: np.ndarray,
+        lidar_triplet: np.ndarray,
+        depth_image: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, bool]:
+        nonlocal depth_gate_reason, depth_gate_drop_count
+        lr, la = _sanitize_lidar_scan(
+            ranges=np.asarray(lidar_ranges, dtype=np.float32),
+            angles_deg=np.asarray(lidar_angles_deg, dtype=np.float32),
+            default_far=float(args.sensor_default_far),
+        )
+        lt = np.asarray(lidar_triplet, dtype=np.float32).reshape(-1)
+        if lt.shape[0] != 3:
+            lt = _lidar_triplet_from_scan(ranges=lr, angles_deg=la, default_far=float(args.sensor_default_far))
+        lidar_model = LidarRayModel(angles_deg=tuple(float(a) for a in la.tolist()))
+        lidar_rays = lidar_model.build_rays(
+            ranges=lr,
+            default_far=float(args.sensor_default_far),
+            min_range=float(args.sensor_obs_min_range),
+            max_range=float(args.sensor_obs_max_range),
+        )
+        depth_rays = []
+        use_depth = False
+        if args.sensor_use_depth and (depth_image is not None):
+            rep = depth_gate.update(
+                depth_image=depth_image,
+                lidar_triplet=lt,
+                default_far=float(args.sensor_default_far),
+                min_valid_depth=float(args.depth_min_valid),
+            )
+            use_depth = bool(rep.allow_depth)
+            depth_gate_reason = str(rep.reason)
+            if not use_depth:
+                depth_gate_drop_count += 1
+            if use_depth:
+                depth_rays = depth_ray_model.build_rays(
+                    depth_image=depth_image,
+                    min_range=float(args.sensor_obs_min_range),
+                    max_range=float(args.sensor_obs_max_range),
+                )
+        else:
+            depth_gate_reason = "depth_disabled"
+        rays = fuse_rays_to_hits_free(lidar_rays=lidar_rays, depth_rays=depth_rays, prefer_nearer=True)
+        occ_map.update_from_rays(
+            base_xy=state_now[:2],
+            base_yaw=float(state_now[2]),
+            rays=rays,
+            min_range=float(args.sensor_obs_min_range),
+            max_range=float(args.sensor_obs_max_range),
+        )
+        obstacles = occ_map.extract_obstacles_as_circles(
+            threshold=float(args.map_occ_threshold),
+            min_cluster_cells=int(args.map_min_cluster_cells),
+            max_obstacles=int(args.map_max_obstacles),
+        )
+        occ_grid = occ_map.occupancy(threshold=float(args.map_occ_threshold))
+        occ_observed = occ_map.observed_mask(threshold=float(args.map_observed_threshold))
+        occ_meta = occ_map.as_meta()
+        return obstacles, occ_grid, occ_observed, occ_meta.min_xy, float(occ_meta.resolution), bool(use_depth)
+
+    def select_front_obstacles(obstacles_xyr: np.ndarray, state_now: np.ndarray) -> np.ndarray:
+        obs = np.asarray(obstacles_xyr, dtype=np.float32)
+        if obs.ndim != 2 or obs.shape[0] == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+        base_xy_now = state_now[:2]
+        yaw_now = float(state_now[2])
+        rel_world = obs[:, :2] - base_xy_now[None, :]
+        rel_body = np.stack([world_to_body(v, yaw_now) for v in rel_world], axis=0)
+        fov = np.deg2rad(float(max(5.0, args.front_guide_fov_deg)))
+        ang = np.abs(np.arctan2(rel_body[:, 1], np.maximum(rel_body[:, 0], 1e-6)))
+        m = (rel_body[:, 0] >= float(args.front_guide_min_x)) & (ang <= fov)
+        front = obs[m]
+        if front.shape[0] <= 0:
+            return np.zeros((0, 3), dtype=np.float32)
+        return front.astype(np.float32)
+
+    def update_front_obstacle_memory(obstacles_all: np.ndarray, state_now: np.ndarray) -> np.ndarray:
+        front = select_front_obstacles(obstacles_xyr=obstacles_all, state_now=state_now)
+        front_obs_memory.append(front)
+        merged = _merge_obstacle_frames(
+            frames=front_obs_memory,
+            cell_size=float(args.sensor_obs_radius),
+            max_points=int(args.front_guide_max_points),
+        )
+        if merged.shape[0] <= 0 and args.front_guide_fallback_all:
+            obs = np.asarray(obstacles_all, dtype=np.float32)
+            return obs if obs.ndim == 2 else np.zeros((0, 3), dtype=np.float32)
+        return merged
+
+    def build_guide_obstacles(obstacles_all: np.ndarray, state_now: np.ndarray) -> np.ndarray:
+        obs = update_front_obstacle_memory(obstacles_all=obstacles_all, state_now=state_now)
+        out = np.asarray(obs, dtype=np.float32)
+        if out.ndim != 2 or out.shape[0] <= 0:
+            return np.zeros((0, 3), dtype=np.float32)
+        if not args.oracle_mode:
+            out = out.copy()
+            scale = float(max(0.1, args.guide_obs_radius_scale))
+            out[:, 2] = np.maximum(float(args.guide_obs_radius_min), out[:, 2] * scale)
+        return out
+
+    def filter_depth_features(
+        obs_now: dict,
+        depth_valid: bool,
+        lidar_ranges: np.ndarray,
+        lidar_angles_deg: np.ndarray,
+    ) -> float:
+        nonlocal depth_front_ema
+        left_l, front_l, right_l, _ = _lidar_sector_min(
+            ranges=lidar_ranges,
+            angles_deg=lidar_angles_deg,
+            default_far=float(args.sensor_default_far),
+        )
+        lidar_sector = np.array([left_l, front_l, right_l], dtype=np.float32)
+        if not depth_valid:
+            sec_fused = lidar_sector.astype(np.float32)
+            obs_now["depth_sector_min"] = sec_fused
+            obs_now["front_clearance"] = np.array([float(sec_fused[1])], dtype=np.float32)
+            min_clear = float(np.min(sec_fused))
+            obs_now["min_clearance"] = np.array([min_clear], dtype=np.float32)
+            return min_clear
+        sec = np.asarray(obs_now["depth_sector_min"], dtype=np.float32).reshape(-1)
+        if sec.shape[0] != 3:
+            sec = lidar_sector.copy()
+        min_valid_depth = float(max(args.depth_min_valid, 0.5 * args.sensor_obs_min_range))
+        invalid = (~np.isfinite(sec)) | (sec < min_valid_depth)
+        sec_depth = sec.copy()
+        sec_depth[invalid] = np.inf
+        sec_fused = np.minimum(sec_depth, lidar_sector)
+        bad_fused = (~np.isfinite(sec_fused)) | (sec_fused <= 0.0)
+        sec_fused[bad_fused] = lidar_sector[bad_fused]
+        depth_sector_hist.append(sec_fused.copy())
+        sec_med = np.median(np.stack(list(depth_sector_hist), axis=0), axis=0).astype(np.float32)
+        front_raw = float(sec_med[1])
+        if depth_front_ema is None:
+            depth_front_ema = front_raw
+        else:
+            a = float(np.clip(args.depth_front_ema_alpha, 0.0, 0.999))
+            depth_front_ema = a * float(depth_front_ema) + (1.0 - a) * front_raw
+        sec_med[1] = float(depth_front_ema)
+        obs_now["depth_sector_min"] = sec_med
+        obs_now["front_clearance"] = np.array([float(depth_front_ema)], dtype=np.float32)
+        min_clear = float(np.min(sec_med))
+        obs_now["min_clearance"] = np.array([min_clear], dtype=np.float32)
+        return min_clear
+
+    def render_depth_required() -> np.ndarray | None:
+        depth = _render_depth_image(
+            renderer=depth_renderer,
+            data=env.data,
+            camera_name=args.depth_camera,
+        )
+        if args.depth_required and depth is None and (not args.oracle_mode) and args.sensor_use_depth:
+            raise RuntimeError("Depth is required but depth frame render failed.")
+        return depth
 
     collision_steps = 0
     recover_events = 0
     recover_collision_events = 0
     recover_stall_events = 0
-    boundary_guard_steps = 0
     progress_gate_events = 0
-    recover_mode = "NONE"
-    recover_phase_left = 0
-    recover_turn_sign = 1.0
+    supervisor = SafetySupervisor(build_supervisor_config(args))
+    supervisor_override_steps = 0
+    trigger_reason_steps: dict[str, int] = {}
+    mppi_action_steps = 0
+    terminal_mppi_steps = 0
+    speed_cap_applied_steps = 0
+    mppi_reverse_raw_steps = 0
+    nominal_reverse_suppressed_steps = 0
+    dock_reverse_suppressed_steps = 0
+    dock_action_steps = 0
     path_remain_hist = []
+    goal_progress_hist: deque[float] = deque(maxlen=max(2, int(args.sup_progress_window)))
     action_delta_hist = []
     adaptive_mode = "OPEN"
     adaptive_mode_hold = 0
     adaptive_switches = 0
     adaptive_mode_steps = {"OPEN": 0, "TIGHT": 0, "STUCK": 0, "DOCK": 0}
     prev_action = np.zeros((2,), dtype=np.float32)
-    min_dist = float(np.linalg.norm(env.get_base_xy_gt() - target_xy))
-    base_xy_hist = [env.get_base_xy_gt().copy()]
-    x_min = float(min(args.bounds_x_range[0], args.bounds_x_range[1]))
-    x_max = float(max(args.bounds_x_range[0], args.bounds_x_range[1]))
-    y_min = float(min(args.bounds_y_range[0], args.bounds_y_range[1]))
-    y_max = float(max(args.bounds_y_range[0], args.bounds_y_range[1]))
-    bounds_margin = float(max(0.0, args.bounds_hard_margin))
+    boundary_recover_latch_steps = 0
+    min_dist = float(np.linalg.norm(base_xy0 - target_xy))
+    base_xy_hist = [base_xy0.copy()]
+    guide_robot_radius = float(args.robot_radius if args.oracle_mode else args.sensor_guide_robot_radius)
+    guide_inflate_margin = float(args.scene_path_inflate_margin if args.oracle_mode else args.sensor_guide_inflate_margin)
+    guide_los_margin = float(args.goal_los_margin if args.oracle_mode else args.sensor_goal_los_margin)
+    waypoint_margin_eff = float(args.waypoint_margin if args.oracle_mode else args.sensor_waypoint_margin)
+    chain_trigger_counts: dict[str, int] = {}
+    chain_action_source_counts = {
+        "SUPERVISOR": 0,
+        "DOCK_STOP": 0,
+        "MPPI": 0,
+    }
+    chain_guide_policy_counts = {
+        "RAW_GOAL": 0,
+        "GOAL_DIRECT": 0,
+        "GLOBAL_PATH": 0,
+        "WAYPOINT": 0,
+    }
+    chain_mppi_bypassed_steps = 0
+    chain_mppi_post_delta_gt_eps_steps = 0
+    chain_mppi_post_delta_norm_sum = 0.0
+    chain_action_post_delta_norm_hist = []
+    chain_boundary_mode_hist: list[str] = []
+    chain_boundary_signed_dist_hist: list[float] = []
+    chain_boundary_inward_speed_hist: list[float] = []
+    chain_cost_group_hist = {"task": [], "safety": [], "control": [], "terminal": [], "total": []}
+    chain_guide_bfs_replan_success = 0
+    chain_guide_bfs_replan_fail = 0
+    chain_guide_bfs_reachable_steps = 0
+    chain_guide_bfs_unreachable_steps = 0
+    trace_every = max(1, int(args.trace_every))
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         for step in range(args.max_steps):
             if not viewer.is_running():
                 break
 
             t0 = time.time()
-            base_xy_now = env.get_base_xy_gt()
-            dist_goal_now = float(np.linalg.norm(base_xy_now - goal_xy))
-            touch_now = env.get_touch_force()
-            pre_clearances = np.linalg.norm(obstacles[:, :2] - base_xy_now[None, :], axis=1) - (obstacles[:, 2] + args.robot_radius)
-            pre_min_clearance = float(np.min(pre_clearances))
-            near_collision = (
-                pre_min_clearance < args.emergency_clearance
-                or touch_now > args.collision_touch_threshold
-            )
-            out_of_bounds_hard = (
-                base_xy_now[0] < (x_min + bounds_margin)
-                or base_xy_now[0] > (x_max - bounds_margin)
-                or base_xy_now[1] < (y_min + bounds_margin)
-                or base_xy_now[1] > (y_max - bounds_margin)
-            )
-            if near_collision and recover_mode == "NONE":
-                recover_mode = "STOP"
-                recover_phase_left = max(1, int(args.recover_stop_steps))
-                recover_turn_sign = pick_turn_sign_from_nearest_obstacle(state_now=state, base_xy_now=base_xy_now)
-                recover_events += 1
-                recover_collision_events += 1
+            chain_trigger_hits: list[str] = []
+            chain_action_source = "MPPI"
+            chain_guide_policy = "RAW_GOAL"
+            chain_guide_bfs_reachable = None
+            chain_guide_replanned = False
+            chain_guide_nodes = 0
+            boundary_just_released = False
+            if boundary_recover_latch_steps > 0:
+                boundary_recover_latch_steps -= 1
+            recover_reentry_blocked = supervisor.cooldown_left > 0
+            sensor_lidar_scan_now = np.array([args.sensor_default_far, args.sensor_default_far, args.sensor_default_far], dtype=np.float32)
+            sensor_lidar_angles_now = np.array([30.0, 0.0, -30.0], dtype=np.float32)
+            sensor_lidar_triplet_now = np.array([args.sensor_default_far, args.sensor_default_far, args.sensor_default_far], dtype=np.float32)
+            sector_now = sensor_lidar_triplet_now.copy()
+            rear_clearance_now = float(args.sensor_default_far)
+            occ_grid_nav = None
+            occ_observed_nav = None
+            occ_min_xy_nav = None
+            occ_res_nav = None
+            if args.oracle_mode:
+                base_xy_now = env.get_base_xy_gt()
+                dist_goal_now = float(np.linalg.norm(base_xy_now - goal_xy))
+                touch_now = env.get_touch_force()
+                obstacles_nav = obstacles_gt.copy()
+                obstacles_guide = build_guide_obstacles(obstacles_all=obstacles_nav, state_now=state)
+                pre_clearances = np.linalg.norm(obstacles_nav[:, :2] - base_xy_now[None, :], axis=1) - (
+                    obstacles_nav[:, 2] + args.robot_radius
+                )
+                pre_min_clearance = float(np.min(pre_clearances)) if pre_clearances.size > 0 else float(args.sensor_default_far)
+                front_clearance_now = pre_min_clearance
+                corridor_width_now = float(args.sensor_default_far)
+                rear_clearance_now = pre_min_clearance
+            else:
+                depth_now = render_depth_required()
+                obs_now = env.get_unified_observation(
+                    goal_xy_odom=goal_xy,
+                    depth_image=depth_now,
+                    default_far=float(args.sensor_default_far),
+                    collision_threshold=float(args.sensor_collision_threshold),
+                )
+                state = obs_now["state_est"].astype(np.float32)
+                base_xy_now = state[:2].copy()
+                dist_goal_now = float(obs_now["goal_dist"][0])
+                touch_now = float(obs_now["touch_force"][0])
+                sensor_lidar_scan_now = np.asarray(
+                    obs_now.get("lidar_scan", obs_now.get("lidar_triplet", sensor_lidar_scan_now)),
+                    dtype=np.float32,
+                ).reshape(-1)
+                sensor_lidar_angles_now = np.asarray(
+                    obs_now.get("lidar_angles_deg", sensor_lidar_angles_now),
+                    dtype=np.float32,
+                ).reshape(-1)
+                sensor_lidar_scan_now, sensor_lidar_angles_now = _sanitize_lidar_scan(
+                    ranges=sensor_lidar_scan_now,
+                    angles_deg=sensor_lidar_angles_now,
+                    default_far=float(args.sensor_default_far),
+                )
+                sensor_lidar_triplet_now = np.asarray(
+                    obs_now.get(
+                        "lidar_triplet",
+                        _lidar_triplet_from_scan(
+                            ranges=sensor_lidar_scan_now,
+                            angles_deg=sensor_lidar_angles_now,
+                            default_far=float(args.sensor_default_far),
+                        ),
+                    ),
+                    dtype=np.float32,
+                ).reshape(-1)
+                if sensor_lidar_triplet_now.shape[0] != 3:
+                    sensor_lidar_triplet_now = _lidar_triplet_from_scan(
+                        ranges=sensor_lidar_scan_now,
+                        angles_deg=sensor_lidar_angles_now,
+                        default_far=float(args.sensor_default_far),
+                    )
+                obstacles_nav, occ_grid_nav, occ_observed_nav, occ_min_xy_nav, occ_res_nav, depth_used_now = update_map_obstacles(
+                    state_now=state,
+                    lidar_ranges=sensor_lidar_scan_now,
+                    lidar_angles_deg=sensor_lidar_angles_now,
+                    lidar_triplet=sensor_lidar_triplet_now,
+                    depth_image=depth_now,
+                )
+                pre_min_clearance = filter_depth_features(
+                    obs_now=obs_now,
+                    depth_valid=depth_used_now,
+                    lidar_ranges=sensor_lidar_scan_now,
+                    lidar_angles_deg=sensor_lidar_angles_now,
+                )
+                front_clearance_now = float(obs_now["front_clearance"][0])
+                corridor_width_now = float(obs_now["corridor_width"][0])
+                left_s, front_s, right_s, rear_s = _lidar_sector_min(
+                    ranges=sensor_lidar_scan_now,
+                    angles_deg=sensor_lidar_angles_now,
+                    default_far=float(args.sensor_default_far),
+                )
+                sector_now = np.asarray(
+                    obs_now.get("depth_sector_min", np.array([left_s, front_s, right_s], dtype=np.float32)),
+                    dtype=np.float32,
+                ).reshape(-1)
+                if sector_now.shape[0] != 3:
+                    sector_now = np.array([left_s, front_s, right_s], dtype=np.float32)
+                rear_clearance_now = float(rear_s)
+                obstacles_guide = build_guide_obstacles(obstacles_all=obstacles_nav, state_now=state)
+            goal_body_now = world_to_body(goal_xy - base_xy_now, float(state[2]))
+            goal_progress_hist.append(float(dist_goal_now))
+            diverge_dist_hist.append(float(dist_goal_now))
+            if (
+                args.icode_diverge_fallback
+                and (not icode_fallback_triggered)
+                and args.planner_model == "icode"
+                and hybrid_fallback_model is not None
+                and step >= int(args.icode_diverge_min_step)
+                and len(diverge_dist_hist) >= max(2, int(args.icode_diverge_window))
+            ):
+                dist_increase = float(diverge_dist_hist[-1] - diverge_dist_hist[0])
+                if dist_increase >= float(args.icode_diverge_min_increase):
+                    mppi.model = hybrid_fallback_model
+                    icode_fallback_triggered = True
+                    print(
+                        f"[fallback] step={step:04d} pure-icode diverged "
+                        f"(+{dist_increase:.3f}m over {len(diverge_dist_hist)} steps); "
+                        f"switch to hybrid alpha={float(args.icode_fallback_alpha):.3f}"
+                    )
+            side_clearance = float(np.min(sector_now[[0, 2]])) if sector_now.shape[0] >= 3 else float(pre_min_clearance)
 
-            goal_blocked = line_of_sight_blocked(
+            _, goal_blocked_conf, _, _ = line_of_sight_blocked_confidence(
                 start_xy=base_xy_now,
                 goal_xy=goal_xy,
-                obstacles_xyr=obstacles,
-                robot_radius=args.robot_radius,
-                margin=args.goal_los_margin,
+                obstacles_xyr=obstacles_guide,
+                robot_radius=guide_robot_radius,
+                margin=guide_los_margin,
+                occ_grid=occ_grid_nav if (not args.oracle_mode) else None,
+                occ_observed=occ_observed_nav if (not args.oracle_mode) else None,
+                occ_min_xy=occ_min_xy_nav if (not args.oracle_mode) else None,
+                occ_resolution=occ_res_nav if (not args.oracle_mode) else None,
+                blocked_conf_threshold=float(args.goal_blocked_enter_conf),
             )
+            goal_blocked_conf_hist.append(float(goal_blocked_conf))
+            if goal_blocked_state:
+                if float(goal_blocked_conf) <= float(args.goal_blocked_exit_conf):
+                    goal_blocked_exit_count += 1
+                    if goal_blocked_exit_count >= max(1, int(args.goal_blocked_exit_steps)):
+                        goal_blocked_state = False
+                        goal_blocked_enter_count = 0
+                        goal_blocked_exit_count = 0
+                else:
+                    goal_blocked_exit_count = 0
+            else:
+                if float(goal_blocked_conf) >= float(args.goal_blocked_enter_conf):
+                    goal_blocked_enter_count += 1
+                    if goal_blocked_enter_count >= max(1, int(args.goal_blocked_enter_steps)):
+                        goal_blocked_state = True
+                        goal_blocked_enter_count = 0
+                        goal_blocked_exit_count = 0
+                else:
+                    goal_blocked_enter_count = 0
+            goal_blocked = bool(goal_blocked_state)
             if goal_blocked:
                 goal_blocked_steps += 1
                 goal_los_clear_count = 0
             else:
                 goal_los_clear_count += 1
+            blocked_goal_dist_buffer.append(float(dist_goal_now))
+            if force_waypoint_latch_steps > 0:
+                force_waypoint_latch_steps -= 1
+            if (
+                args.blocked_force_waypoint_enable
+                and args.auto_waypoint
+                and force_waypoint_latch_steps <= 0
+                and supervisor.state == SupervisorState.NORMAL
+                and nav_mode == "NAV"
+                and len(blocked_goal_dist_buffer) >= max(2, int(args.blocked_force_waypoint_window))
+            ):
+                blocked_progress = float(blocked_goal_dist_buffer[0] - blocked_goal_dist_buffer[-1])
+                if (
+                    blocked_progress < float(args.blocked_force_waypoint_min_progress)
+                    and pre_min_clearance < float(args.blocked_force_waypoint_clearance)
+                    and (goal_blocked or recover_reentry_blocked)
+                ):
+                    force_waypoint_latch_steps = max(1, int(args.blocked_force_waypoint_latch_steps))
+                    force_waypoint_events += 1
+                    chain_trigger_hits.append("force_waypoint")
+                    chain_trigger_counts["force_waypoint"] = chain_trigger_counts.get("force_waypoint", 0) + 1
+                    forced_sign = choose_turn_sign(
+                        pick_turn_sign_from_nearest_obstacle(state_now=state, base_xy_now=base_xy_now),
+                        sensor_lidar_triplet_now,
+                        lidar_ranges=sensor_lidar_scan_now,
+                        lidar_angles_deg=sensor_lidar_angles_now,
+                    )
+                    waypoint_forced_side = int(np.sign(forced_sign)) if forced_sign != 0.0 else 1
+                    waypoint_xy = None
+                    waypoint_hold_steps = 0
+                    guide_path_xy = None
+                    guide_progress_idx = 0
+                    guide_commit_side = 0
+                    guide_commit_buf = []
 
             dpath_recent = None
             if len(path_remain_hist) >= 2:
@@ -675,20 +1292,97 @@ def main() -> None:
             else:
                 adaptive_mode = "OPEN"
                 adaptive_mode_steps["OPEN"] += 1
+            turn_sign_hint = choose_turn_sign(
+                pick_turn_sign_from_nearest_obstacle(state_now=state, base_xy_now=base_xy_now),
+                sensor_lidar_triplet_now,
+                lidar_ranges=sensor_lidar_scan_now,
+                lidar_angles_deg=sensor_lidar_angles_now,
+            )
+            dgoal_recent = float("nan")
+            if len(goal_progress_hist) >= 2:
+                dgoal_recent = float(goal_progress_hist[0] - goal_progress_hist[-1])
+            supervisor_prev_state = supervisor.state.value
+            supervisor_decision = supervisor.step(
+                SupervisorInput(
+                    step=int(step),
+                    state=np.asarray(state, dtype=np.float32),
+                    base_xy=np.asarray(base_xy_now, dtype=np.float32),
+                    goal_xy=np.asarray(goal_xy, dtype=np.float32),
+                    dist_goal=float(dist_goal_now),
+                    touch_force=float(touch_now),
+                    min_clearance=float(pre_min_clearance),
+                    side_clearance=float(side_clearance),
+                    front_clearance=float(front_clearance_now),
+                    goal_blocked=bool(goal_blocked),
+                    prev_action=np.asarray(prev_action, dtype=np.float32),
+                    turn_sign_hint=float(turn_sign_hint),
+                    path_progress_recent=float(dpath_recent) if dpath_recent is not None else float("nan"),
+                    target_switched_recent=bool(target_switched_recent),
+                    goal_progress_recent=float(dgoal_recent),
+                    rear_clearance=float(rear_clearance_now),
+                )
+            )
+            trigger_reason = str(supervisor_decision.trigger_reason)
+            if trigger_reason != "normal":
+                chain_trigger_hits.append(trigger_reason)
+            chain_trigger_counts[trigger_reason] = chain_trigger_counts.get(trigger_reason, 0) + 1
+            trigger_reason_steps[trigger_reason] = trigger_reason_steps.get(trigger_reason, 0) + 1
+            chain_boundary_mode_hist.append(str(supervisor_decision.boundary_mode))
+            chain_boundary_signed_dist_hist.append(float(supervisor_decision.boundary_signed_dist))
+            chain_boundary_inward_speed_hist.append(float(supervisor_decision.boundary_inward_speed))
+            if supervisor_decision.action_source == "SUPERVISOR":
+                supervisor_override_steps += 1
+            if supervisor_prev_state == SupervisorState.BOUNDARY_GUARD.value and supervisor_decision.state == SupervisorState.NORMAL.value:
+                boundary_just_released = True
+                boundary_recover_latch_steps = max(
+                    boundary_recover_latch_steps,
+                    max(0, int(args.boundary_recover_guide_steps)),
+                )
+            if supervisor_decision.transitioned:
+                if trigger_reason == "near_collision":
+                    recover_events += 1
+                    recover_collision_events += 1
+                elif trigger_reason in ("jam_contact", "progress_stall", "spin_stall"):
+                    recover_events += 1
+                    recover_stall_events += 1
+                    if trigger_reason == "progress_stall":
+                        progress_gate_events += 1
+                if (
+                    args.auto_waypoint
+                    and trigger_reason in ("near_collision", "jam_contact", "progress_stall", "spin_stall")
+                ):
+                    force_waypoint_latch_steps = max(
+                        force_waypoint_latch_steps,
+                        max(1, int(args.blocked_force_waypoint_latch_steps)),
+                    )
+                    if waypoint_forced_side == 0:
+                        waypoint_forced_side = int(np.sign(turn_sign_hint)) if turn_sign_hint != 0.0 else 1
+                    waypoint_xy = None
+                    waypoint_hold_steps = 0
+                    guide_path_xy = None
+                    guide_progress_idx = 0
+                    guide_commit_side = 0
+                    guide_commit_buf = []
 
+            goal_heading_err_now = float(np.arctan2(goal_body_now[1], max(goal_body_now[0], 1e-6)))
+            aligned_enter = (
+                abs(goal_heading_err_now) <= float(args.dock_align_yaw_enter)
+                and abs(float(goal_body_now[1])) <= float(args.dock_align_lateral_enter)
+            )
             if nav_mode == "NAV" and dist_goal_now <= args.dock_brake_radius:
-                nav_mode = "BRAKE_ALIGN"
-                dock_hold_count = 0
-            elif nav_mode == "BRAKE_ALIGN":
-                if dist_goal_now <= args.dock_enter_radius:
-                    nav_mode = "DOCK_STOP"
-                    dock_hold_count = 0
-                elif dist_goal_now > args.dock_exit_radius:
-                    nav_mode = "NAV"
-            elif nav_mode == "DOCK_STOP":
-                if dist_goal_now > args.dock_exit_radius:
+                if aligned_enter:
                     nav_mode = "BRAKE_ALIGN"
                     dock_hold_count = 0
+            elif nav_mode == "BRAKE_ALIGN":
+                if (
+                    dist_goal_now > args.dock_exit_radius
+                    or abs(goal_heading_err_now) >= float(args.dock_align_yaw_exit)
+                    or abs(float(goal_body_now[1])) >= float(args.dock_align_lateral_exit)
+                ):
+                    nav_mode = "NAV"
+
+            terminal_gate = float(max(args.goal_tol * 1.05, args.terminal_mppi_enter_radius))
+            terminal_mppi_mode = bool((nav_mode == "BRAKE_ALIGN") or (dist_goal_now <= terminal_gate))
 
             if args.auto_waypoint and args.waypoint_stuck_window > 1:
                 goal_dist_buffer.append(dist_goal_now)
@@ -708,46 +1402,64 @@ def main() -> None:
                                 waypoint_forced_side = -waypoint_last_side
                             else:
                                 waypoint_forced_side = 1 if (waypoint_stuck_events % 2 == 1) else -1
+                        if args.auto_waypoint and supervisor.state == SupervisorState.NORMAL and nav_mode == "NAV":
+                            prev_latch = int(force_waypoint_latch_steps)
+                            force_waypoint_latch_steps = max(
+                                force_waypoint_latch_steps,
+                                max(1, int(args.waypoint_stuck_force_latch_steps)),
+                            )
+                            if int(force_waypoint_latch_steps) > prev_latch:
+                                waypoint_stuck_force_events += 1
+                            guide_path_xy = None
+                            guide_progress_idx = 0
+                            guide_commit_side = 0
+                            guide_commit_buf = []
                         waypoint_stuck_cooldown = args.waypoint_stuck_cooldown
 
-            if out_of_bounds_hard:
-                action = boundary_guard_action(state_now=state, base_xy_now=base_xy_now)
-                boundary_guard_steps += 1
-                recover_mode = "NONE"
-                recover_phase_left = 0
-            elif nav_mode == "DOCK_STOP":
-                action = dock_action(state_now=state, base_xy_now=base_xy_now, goal_xy_now=goal_xy)
-            elif recover_mode != "NONE":
-                action = recover_action(mode=recover_mode, turn_sign=recover_turn_sign)
-                recover_phase_left -= 1
-                if recover_phase_left <= 0:
-                    if recover_mode == "STOP":
-                        recover_mode = "ROTATE"
-                        recover_phase_left = max(1, int(args.recover_rotate_steps))
-                    elif recover_mode == "ROTATE":
-                        recover_mode = "FORWARD"
-                        recover_phase_left = max(1, int(args.recover_forward_steps))
-                    else:
-                        recover_mode = "NONE"
-                        recover_phase_left = 0
+            guide_failed_this_step = False
+            current_nav_target = np.asarray(goal_xy, dtype=np.float32)
+            if supervisor_decision.action_source == "SUPERVISOR" and supervisor_decision.override_vw is not None:
+                action = diff_drive_to_wheels(
+                    v_cmd=float(supervisor_decision.override_vw[0]),
+                    w_cmd=float(supervisor_decision.override_vw[1]),
+                )
+                chain_action_source = "SUPERVISOR"
             else:
                 target_for_mppi = goal_xy
                 reference_traj = None
                 used_global_guide = False
+                goal_direct_dist_eff = float(args.goal_direct_dist)
+                if not args.oracle_mode:
+                    goal_direct_dist_eff = min(goal_direct_dist_eff, float(args.sensor_goal_direct_dist))
+                goal_direct_allowed = (
+                    (args.oracle_mode or (not args.sensor_strict_path))
+                    and abs(goal_heading_err_now) <= float(args.goal_direct_yaw_max)
+                    and abs(float(goal_body_now[1])) <= float(args.goal_direct_lateral_max)
+                )
                 goal_direct_mode = (
                     bool(args.goal_direct_on_clear)
+                    and goal_direct_allowed
                     and goal_los_clear_count >= max(1, int(args.goal_direct_clear_steps))
-                    and dist_goal_now <= float(args.goal_direct_dist)
+                    and dist_goal_now <= goal_direct_dist_eff
                 )
+                if boundary_recover_latch_steps > 0:
+                    goal_direct_mode = False
                 if goal_direct_mode:
+                    chain_guide_policy = "GOAL_DIRECT"
                     goal_direct_steps += 1
                     guide_commit_side = 0
                     guide_commit_buf = []
                     guide_commit_until_step = -1
                     path_remain_hist = []
                     used_global_guide = True
-                elif args.global_guide:
-                    need_guide_replan = (step % max(1, args.guide_replan_interval) == 0) or (guide_path_xy is None)
+                elif args.global_guide and force_waypoint_latch_steps <= 0:
+                    chain_guide_policy = "GLOBAL_PATH"
+                    need_guide_replan = (
+                        (step % max(1, args.guide_replan_interval) == 0)
+                        or (guide_path_xy is None)
+                        or boundary_just_released
+                        or (boundary_recover_latch_steps > 0)
+                    )
                     if guide_path_xy is not None and guide_path_xy.shape[0] > 0:
                         dist_to_path = float(np.min(np.linalg.norm(guide_path_xy - base_xy_now[None, :], axis=1)))
                         if args.corridor_commit and guide_commit_side != 0 and step <= guide_commit_until_step:
@@ -758,34 +1470,52 @@ def main() -> None:
                         elif dist_to_path > max(0.1, float(args.waypoint_switch_radius)):
                             need_guide_replan = True
                     if need_guide_replan:
+                        chain_guide_replanned = True
                         guide_replans += 1
                         guide_path_xy = plan_global_path_xy(
                             start_xy=base_xy_now.astype(np.float32),
                             goal_xy=goal_xy.astype(np.float32),
-                            obstacles_xyr=obstacles.astype(np.float32),
-                            robot_radius=float(args.robot_radius),
-                            inflation_margin=float(args.scene_path_inflate_margin),
+                            obstacles_xyr=obstacles_guide.astype(np.float32),
+                            robot_radius=guide_robot_radius,
+                            inflation_margin=guide_inflate_margin,
                             grid_resolution=float(args.scene_path_grid_res),
                             grid_padding=float(args.scene_path_grid_padding),
                             max_grid_cells=int(args.guide_max_grid_cells),
+                            occ_grid=occ_grid_nav if (not args.oracle_mode) else None,
+                            occ_min_xy=occ_min_xy_nav if (not args.oracle_mode) else None,
+                            occ_resolution=occ_res_nav if (not args.oracle_mode) else None,
                         )
                         guide_progress_idx = 0
+                        if guide_path_xy is not None and guide_path_xy.shape[0] >= 2:
+                            chain_guide_bfs_replan_success += 1
+                            chain_guide_bfs_reachable = True
+                            chain_guide_nodes = int(guide_path_xy.shape[0])
+                        else:
+                            chain_guide_bfs_replan_fail += 1
+                            chain_guide_bfs_reachable = False
+                    elif guide_path_xy is not None and guide_path_xy.shape[0] >= 2:
+                        chain_guide_bfs_reachable = True
+                        chain_guide_nodes = int(guide_path_xy.shape[0])
+                    elif guide_path_xy is not None:
+                        chain_guide_bfs_reachable = False
                     if guide_path_xy is not None and guide_path_xy.shape[0] >= 2:
                         path_remain_now, guide_idx_rem = compute_path_remaining(
                             path_xy=guide_path_xy,
                             current_xy=base_xy_now.astype(np.float32),
                             min_index=int(guide_progress_idx),
                         )
-                        guide_progress_idx = max(int(guide_progress_idx), int(guide_idx_rem))
+                        guide_floor = max(0, int(guide_progress_idx) - max(0, int(args.guide_backtrack_max)))
+                        guide_progress_idx = max(int(guide_floor), int(guide_idx_rem))
                         target_for_mppi, guide_idx = select_path_lookahead_target(
                             path_xy=guide_path_xy,
                             current_xy=base_xy_now.astype(np.float32),
                             lookahead_m=float(args.guide_lookahead),
                             min_index=int(guide_progress_idx),
                         )
-                        guide_progress_idx = max(int(guide_progress_idx), int(guide_idx))
+                        guide_floor = max(0, int(guide_progress_idx) - max(0, int(args.guide_backtrack_max)))
+                        guide_progress_idx = max(int(guide_floor), int(guide_idx))
                         path_remain_hist.append(float(path_remain_now))
-                        if len(path_remain_hist) > max(2, int(args.progress_window)):
+                        if len(path_remain_hist) > max(2, int(args.sup_progress_window)):
                             path_remain_hist.pop(0)
                         reference_traj = build_reference_traj_from_path(
                             path_xy=guide_path_xy,
@@ -836,6 +1566,7 @@ def main() -> None:
                     else:
                         path_remain_hist = []
                         guide_fail_steps += 1
+                        guide_failed_this_step = True
 
                 if (not used_global_guide) and args.auto_waypoint:
                     if waypoint_xy is not None:
@@ -854,92 +1585,194 @@ def main() -> None:
                                 waypoint_hold_steps = 0
                     need_replan = (step % max(1, args.waypoint_replan_interval) == 0) or (waypoint_xy is None)
                     should_replan = True
-                    if args.waypoint_use_los_gating and (not goal_blocked) and (waypoint_xy is None):
+                    allow_forced_waypoint = bool(waypoint_forced_side != 0)
+                    if (
+                        args.waypoint_use_los_gating
+                        and (not goal_blocked)
+                        and (waypoint_xy is None)
+                        and (not allow_forced_waypoint)
+                        and (not guide_failed_this_step)
+                    ):
                         should_replan = False
                     if need_replan and should_replan:
+                        force_level = 0
+                        if allow_forced_waypoint:
+                            force_level = int(
+                                np.clip(
+                                    waypoint_stuck_events,
+                                    0,
+                                    max(0, int(args.waypoint_force_max_level)),
+                                )
+                            )
+                        lat_boost = float(max(0.0, args.waypoint_force_lateral_boost)) * float(force_level)
+                        fwd_boost = float(max(0.0, args.waypoint_force_forward_boost)) * float(force_level)
+                        waypoint_lateral_extra_eff = float(max(0.0, args.waypoint_lateral_extra + lat_boost))
+                        waypoint_max_lateral_eff = float(max(0.0, args.waypoint_max_lateral + lat_boost))
+                        waypoint_max_forward_eff = float(max(args.waypoint_min_forward, args.waypoint_max_forward + fwd_boost))
                         wp, side = compute_auto_waypoint_with_side(
                             start_xy=base_xy_now,
                             goal_xy=goal_xy,
-                            obstacles_xyr=obstacles,
-                            robot_radius=args.robot_radius,
-                            margin=args.waypoint_margin,
-                            lateral_extra=args.waypoint_lateral_extra,
+                            obstacles_xyr=obstacles_guide,
+                            robot_radius=guide_robot_radius,
+                            margin=waypoint_margin_eff,
+                            lateral_extra=waypoint_lateral_extra_eff,
                             preferred_side=waypoint_forced_side,
+                            waypoint_max_lateral=waypoint_max_lateral_eff,
+                            waypoint_min_forward=float(args.waypoint_min_forward),
+                            waypoint_max_forward=waypoint_max_forward_eff,
                         )
+                        if wp is None:
+                            side_pref = int(np.sign(waypoint_forced_side))
+                            if side_pref == 0:
+                                side_pref = int(
+                                    np.sign(
+                                        choose_turn_sign(
+                                            pick_turn_sign_from_nearest_obstacle(state_now=state, base_xy_now=base_xy_now),
+                                            sensor_lidar_triplet_now,
+                                            lidar_ranges=sensor_lidar_scan_now,
+                                            lidar_angles_deg=sensor_lidar_angles_now,
+                                        )
+                                    )
+                                )
+                            if side_pref == 0:
+                                side_pref = 1
+                            goal_vec_tmp = goal_xy - base_xy_now
+                            goal_norm_tmp = float(np.linalg.norm(goal_vec_tmp))
+                            if goal_norm_tmp > 1e-6:
+                                gdir = goal_vec_tmp / goal_norm_tmp
+                            else:
+                                yaw_tmp = float(state[2])
+                                gdir = np.array([np.cos(yaw_tmp), np.sin(yaw_tmp)], dtype=np.float32)
+                            gperp = np.array([-gdir[1], gdir[0]], dtype=np.float32)
+                            fwd_len = float(np.clip(0.8 * float(args.guide_lookahead) + fwd_boost, 0.45, 1.60))
+                            lat_len = float(np.clip(float(args.waypoint_lateral_extra) + lat_boost, 0.20, 1.40))
+                            wp = base_xy_now + fwd_len * gdir + float(side_pref) * lat_len * gperp
+                            side = int(side_pref)
                         waypoint_replans += 1
                         waypoint_xy = wp
                         waypoint_last_side = int(side)
                         waypoint_forced_side = 0
                         waypoint_hold_steps = 0
                     if waypoint_xy is not None:
+                        chain_guide_policy = "WAYPOINT"
                         target_for_mppi = waypoint_xy
                         waypoint_active_steps += 1
+
+                if str(supervisor_decision.boundary_mode) == "SOFT":
+                    boundary_soft_steps += 1
+                    chain_guide_policy = "BOUNDARY_SOFT"
+                    target_for_mppi = compute_boundary_recover_target(
+                        base_xy=base_xy_now.astype(np.float32),
+                        goal_xy=goal_xy.astype(np.float32),
+                        bounds_x_range=(float(args.bounds_x_range[0]), float(args.bounds_x_range[1])),
+                        bounds_y_range=(float(args.bounds_y_range[0]), float(args.bounds_y_range[1])),
+                        bound_margin=float(args.target_bound_margin),
+                        path_xy=guide_path_xy if (guide_path_xy is not None and guide_path_xy.shape[0] >= 2) else None,
+                        lookahead_m=float(max(0.2, args.guide_lookahead)),
+                    )
+                    used_global_guide = True
+
+                ref_path_for_target = None
+                if guide_path_xy is not None and np.asarray(guide_path_xy).ndim == 2 and guide_path_xy.shape[0] >= 2:
+                    ref_path_for_target = np.asarray(guide_path_xy, dtype=np.float32)
+                corridor_max_dev_now = dynamic_target_corridor_max_dev(
+                    min_clearance=float(pre_min_clearance),
+                    terminal_mode=bool(terminal_mppi_mode),
+                )
+                jump_max_now = float(args.target_jump_max)
+                if np.isfinite(pre_min_clearance):
+                    c0 = float(max(0.05, args.speed_cap_clearance_hard))
+                    c1 = float(max(c0 + 1e-3, args.corridor_tight_clearance))
+                    tight_gain = float(np.clip((pre_min_clearance - c0) / max(c1 - c0, 1e-6), 0.0, 1.0))
+                    jump_max_now = float(args.target_jump_min + (args.target_jump_max - args.target_jump_min) * tight_gain)
+                target_for_mppi, target_proj_info = project_target_with_invariants(
+                    candidate_xy=np.asarray(target_for_mppi, dtype=np.float32),
+                    prev_target_xy=np.asarray(last_active_target_for_supervisor, dtype=np.float32),
+                    start_xy=base_xy0.astype(np.float32),
+                    goal_xy=goal_xy.astype(np.float32),
+                    bounds_x_range=(float(args.bounds_x_range[0]), float(args.bounds_x_range[1])),
+                    bounds_y_range=(float(args.bounds_y_range[0]), float(args.bounds_y_range[1])),
+                    bound_margin=float(args.target_bound_margin),
+                    corridor_max_dev=float(corridor_max_dev_now),
+                    jump_max=float(jump_max_now),
+                    path_xy=ref_path_for_target,
+                )
+                if float(target_proj_info.get("bound_projected", 0.0)) > 0.5:
+                    target_bound_projected_steps += 1
+                if float(target_proj_info.get("corridor_projected", 0.0)) > 0.5:
+                    target_corridor_projected_steps += 1
+                if float(target_proj_info.get("jump_projected", 0.0)) > 0.5:
+                    target_jump_projected_steps += 1
+                current_nav_target = np.asarray(target_for_mppi, dtype=np.float32)
                 if not used_global_guide:
                     path_remain_hist = []
-
-                progress_stalled = False
-                if used_global_guide and len(path_remain_hist) >= max(2, int(args.progress_window)):
-                    dpath = float(path_remain_hist[0] - path_remain_hist[-1])
-                    if dpath < float(args.progress_min_delta) and dist_goal_now > float(args.goal_tol):
-                        progress_stalled = True
-                        progress_gate_events += 1
-                        path_remain_hist = [path_remain_hist[-1]]
-
-                if progress_stalled:
-                    recover_mode = "STOP"
-                    recover_phase_left = max(1, int(args.recover_stop_steps))
-                    recover_turn_sign = pick_turn_sign_from_nearest_obstacle(state_now=state, base_xy_now=base_xy_now)
-                    recover_events += 1
-                    recover_stall_events += 1
-                    waypoint_xy = None
-                    waypoint_hold_steps = 0
-                    guide_path_xy = None
-                    guide_progress_idx = 0
-                    guide_commit_side = 0
-                    guide_commit_buf = []
-                    action = recover_action(mode="STOP", turn_sign=recover_turn_sign)
-                else:
-                    action = mppi.get_action(
-                        initial_state=state,
-                        target=target_for_mppi,
-                        obstacles=obstacles,
-                        reference_traj=reference_traj,
+                if terminal_mppi_mode:
+                    _apply_adaptive_profile(
+                        mppi=mppi,
+                        base=adaptive_base,
+                        profile=_adaptive_profile("DOCK"),
+                        alpha=float(args.terminal_profile_alpha),
                     )
+                action = mppi.get_action(
+                    initial_state=state,
+                    target=target_for_mppi,
+                    obstacles=obstacles_nav,
+                    reference_traj=reference_traj,
+                )
+                chain_action_source = "MPPI"
+                for k in chain_cost_group_hist:
+                    chain_cost_group_hist[k].append(float(mppi.last_cost_terms.get(k, 0.0)))
 
-            if nav_mode == "BRAKE_ALIGN":
-                denom = max(args.dock_brake_radius - args.dock_enter_radius, 1e-6)
-                frac = (dist_goal_now - args.dock_enter_radius) / denom
-                brake_scale = float(np.clip(frac, 0.15, 1.0))
-                action = action * brake_scale
+            target_switched_recent = bool(
+                np.linalg.norm(np.asarray(current_nav_target, dtype=np.float32) - np.asarray(last_active_target_for_supervisor, dtype=np.float32))
+                > 1e-4
+            )
+            last_active_target_for_supervisor = np.asarray(current_nav_target, dtype=np.float32).copy()
+            planner_action_raw = np.asarray(action, dtype=np.float32).copy()
+            if chain_action_source == "MPPI":
+                vw_raw = diff_drive_forward(
+                    u=np.asarray(action, dtype=np.float32).reshape(2),
+                    wheel_radius=float(args.wheel_radius),
+                    wheel_base=float(args.wheel_base),
+                    drive_sign=float(args.v_forward_sign),
+                )
+                if float(vw_raw[0]) < -1e-5:
+                    mppi_reverse_raw_steps += 1
+                if args.max_delta_u > 0.0:
+                    action = np.clip(action, prev_action - args.max_delta_u, prev_action + args.max_delta_u)
+                action, projected = project_nominal_forward_action(action_u=action, terminal_mode=terminal_mppi_mode)
+                if projected:
+                    nominal_reverse_suppressed_steps += 1
+                action, speed_capped, _ = apply_semantic_speed_cap(
+                    action_u=action,
+                    min_clearance=float(pre_min_clearance),
+                    heading_err_abs=float(abs(goal_heading_err_now)),
+                    dist_goal=float(dist_goal_now),
+                    terminal_mode=terminal_mppi_mode,
+                )
+                if speed_capped:
+                    speed_cap_applied_steps += 1
 
-            if args.goal_slowdown_radius > 0.0:
-                dist_now = float(np.linalg.norm(base_xy_now - goal_xy))
-                if dist_now < args.goal_slowdown_radius:
-                    ratio = dist_now / max(args.goal_slowdown_radius, 1e-6)
-                    scale = float(np.clip(ratio, args.goal_slowdown_min_scale, 1.0))
-                    action = action * scale
-
-            if args.warmup_steps > 0 and step < args.warmup_steps:
-                frac = float(step + 1) / float(max(args.warmup_steps, 1))
-                scale = args.warmup_min_scale + (1.0 - args.warmup_min_scale) * frac
-                action = action * float(np.clip(scale, 0.0, 1.0))
-
-            if 0.0 < args.action_ema_alpha < 1.0:
-                action = args.action_ema_alpha * prev_action + (1.0 - args.action_ema_alpha) * action
-
-            if args.max_delta_u > 0.0:
-                action = np.clip(action, prev_action - args.max_delta_u, prev_action + args.max_delta_u)
-            if (not out_of_bounds_hard) and recover_mode == "NONE":
-                goal_vec = goal_xy - base_xy_now
-                goal_norm = float(np.linalg.norm(goal_vec))
-                if goal_norm > 1e-6 and pre_min_clearance > max(0.18, 1.5 * float(args.emergency_clearance)):
-                    goal_body = world_to_body(goal_vec / goal_norm, float(state[2]))
-                    mean_u = 0.5 * float(action[0] + action[1])
-                    if goal_body[0] > 0.12 and mean_u < 0.0:
-                        action = action - mean_u
-            if args.startup_no_reverse_steps > 0 and step < args.startup_no_reverse_steps:
-                action = np.maximum(action, args.startup_min_u)
             action = np.clip(action, env.ctrl_low, env.ctrl_high).astype(np.float32)
+            post_delta_norm = float(np.linalg.norm(action - planner_action_raw))
+            chain_action_post_delta_norm_hist.append(post_delta_norm)
+            post_delta_flag = bool(post_delta_norm > float(max(0.0, args.action_post_delta_eps)))
+            chain_action_source_counts[chain_action_source] = chain_action_source_counts.get(chain_action_source, 0) + 1
+            if chain_action_source == "MPPI":
+                mppi_action_steps += 1
+                if terminal_mppi_mode:
+                    terminal_mppi_steps += 1
+                chain_mppi_post_delta_norm_sum += post_delta_norm
+                if post_delta_flag:
+                    chain_mppi_post_delta_gt_eps_steps += 1
+            if chain_action_source != "MPPI":
+                chain_mppi_bypassed_steps += 1
+            if chain_guide_bfs_reachable is True:
+                chain_guide_bfs_reachable_steps += 1
+            elif chain_guide_bfs_reachable is False:
+                chain_guide_bfs_unreachable_steps += 1
+            if chain_guide_policy in chain_guide_policy_counts:
+                chain_guide_policy_counts[chain_guide_policy] = chain_guide_policy_counts.get(chain_guide_policy, 0) + 1
             du_now = float(np.linalg.norm(action - prev_action))
             action_delta_hist.append(du_now)
             if len(action_delta_hist) > max(1, int(args.adaptive_osc_window)):
@@ -948,37 +1781,99 @@ def main() -> None:
             state = env.step(action)
             viewer.sync()
 
-            base_xy = env.get_base_xy_gt()
+            if args.oracle_mode:
+                base_xy = env.get_base_xy_gt()
+                dist = float(np.linalg.norm(base_xy - goal_xy))
+                touch_force = env.get_touch_force()
+                obs_clearances = np.linalg.norm(obstacles_gt[:, :2] - base_xy[None, :], axis=1) - (
+                    obstacles_gt[:, 2] + args.robot_radius
+                )
+                min_clearance = float(np.min(obs_clearances)) if obs_clearances.size > 0 else float(args.sensor_default_far)
+            else:
+                depth_after = render_depth_required()
+                obs_after = env.get_unified_observation(
+                    goal_xy_odom=goal_xy,
+                    depth_image=depth_after,
+                    default_far=float(args.sensor_default_far),
+                    collision_threshold=float(args.sensor_collision_threshold),
+                )
+                state = obs_after["state_est"].astype(np.float32)
+                base_xy = state[:2].copy()
+                dist = float(obs_after["goal_dist"][0])
+                touch_force = float(obs_after["touch_force"][0])
+                lidar_scan_after = np.asarray(
+                    obs_after.get("lidar_scan", obs_after.get("lidar_triplet", sensor_lidar_scan_now)),
+                    dtype=np.float32,
+                ).reshape(-1)
+                lidar_ang_after = np.asarray(
+                    obs_after.get("lidar_angles_deg", sensor_lidar_angles_now),
+                    dtype=np.float32,
+                ).reshape(-1)
+                lidar_scan_after, lidar_ang_after = _sanitize_lidar_scan(
+                    ranges=lidar_scan_after,
+                    angles_deg=lidar_ang_after,
+                    default_far=float(args.sensor_default_far),
+                )
+                lidar_triplet_after = np.asarray(
+                    obs_after.get(
+                        "lidar_triplet",
+                        _lidar_triplet_from_scan(
+                            ranges=lidar_scan_after,
+                            angles_deg=lidar_ang_after,
+                            default_far=float(args.sensor_default_far),
+                        ),
+                    ),
+                    dtype=np.float32,
+                ).reshape(-1)
+                obstacles_nav, _, _, _, _, depth_used_after = update_map_obstacles(
+                    state_now=state,
+                    lidar_ranges=lidar_scan_after,
+                    lidar_angles_deg=lidar_ang_after,
+                    lidar_triplet=lidar_triplet_after,
+                    depth_image=depth_after,
+                )
+                min_clearance = filter_depth_features(
+                    obs_now=obs_after,
+                    depth_valid=depth_used_after,
+                    lidar_ranges=lidar_scan_after,
+                    lidar_angles_deg=lidar_ang_after,
+                )
+                obstacles_guide = build_guide_obstacles(obstacles_all=obstacles_nav, state_now=state)
+
             base_xy_hist.append(base_xy.copy())
-            dist = float(np.linalg.norm(base_xy - goal_xy))
             min_dist = min(min_dist, dist)
-            touch_force = env.get_touch_force()
-            obs_clearances = np.linalg.norm(obstacles[:, :2] - base_xy[None, :], axis=1) - (obstacles[:, 2] + args.robot_radius)
-            min_clearance = float(np.min(obs_clearances))
-            if min_clearance < 0.0 or touch_force > args.collision_touch_threshold:
+            if min_clearance < 0.0 or touch_force > args.sup_touch_threshold:
                 collision_steps += 1
             if step % max(1, args.print_interval) == 0:
                 print(
                     f"step={step:04d} dist={dist:.3f} "
                     f"xy=({base_xy[0]:.3f},{base_xy[1]:.3f}) "
                     f"u=({action[0]:.2f},{action[1]:.2f}) "
-                    f"clear={min_clearance:.3f} mode={nav_mode}/{recover_mode}/{adaptive_mode} "
-                    f"gdir={goal_direct_steps}"
+                    f"clear={min_clearance:.3f} mode={nav_mode}/{supervisor_decision.state}/{adaptive_mode} "
+                    f"src={chain_action_source} reason={trigger_reason} gdir={goal_direct_steps} "
+                    f"bmode={supervisor_decision.boundary_mode} bsd={supervisor_decision.boundary_signed_dist:.3f} "
+                    f"gb_conf={goal_blocked_conf:.2f} "
+                    f"cooldown={supervisor.cooldown_left}"
                 )
-
-            if nav_mode == "DOCK_STOP":
-                v_abs = abs(float(args.v_forward_sign) * float(state[3])) if state.shape[0] > 3 else 0.0
-                wz_abs = abs(float(state[4])) if state.shape[0] > 4 else 0.0
-                if dist < args.goal_tol and v_abs < args.dock_v_eps and wz_abs < args.dock_w_eps:
-                    dock_hold_count += 1
+            if args.trace_control_chain and (step % trace_every == 0):
+                if chain_guide_bfs_reachable is None:
+                    bfs_state = "NA"
                 else:
-                    dock_hold_count = 0
-                if dock_hold_count >= max(1, int(args.dock_hold_steps)):
-                    print(f"Dock stop achieved at step={step}, dist={dist:.3f}")
-                    for _ in range(50):
-                        env.step(np.zeros((2,), dtype=np.float32))
-                        viewer.sync()
-                    break
+                    bfs_state = "Y" if chain_guide_bfs_reachable else "N"
+                trig_str = "|".join(chain_trigger_hits) if len(chain_trigger_hits) > 0 else "-"
+                print(
+                    f"[chain] step={step:04d} src={chain_action_source} "
+                    f"mppi_bypassed={1 if chain_action_source != 'MPPI' else 0} "
+                    f"post_delta={post_delta_norm:.4f} post_delta_gt_eps={1 if post_delta_flag else 0} "
+                    f"guide={chain_guide_policy} bfs={bfs_state} "
+                    f"replan={1 if chain_guide_replanned else 0} nodes={chain_guide_nodes} "
+                    f"triggers={trig_str} sup={supervisor_decision.state} "
+                    f"reason={trigger_reason} trans={1 if supervisor_decision.transitioned else 0} "
+                    f"bmode={supervisor_decision.boundary_mode} bsd={supervisor_decision.boundary_signed_dist:.3f} "
+                    f"bin={supervisor_decision.boundary_inward_speed:.3f} gb_conf={goal_blocked_conf:.2f} "
+                    f"bg_latch={boundary_recover_latch_steps} wp_latch={force_waypoint_latch_steps} "
+                    f"cooldown={supervisor.cooldown_left}"
+                )
 
             if dist < args.goal_tol:
                 print(f"Reached goal region at step={step}, dist={dist:.3f}")
@@ -993,18 +1888,82 @@ def main() -> None:
                 if remain > 0:
                     time.sleep(remain)
 
+    supervisor_metrics = supervisor.summary()
+    sup_state_steps = supervisor_metrics.get("state_steps", {})
+    sup_trigger_counts = supervisor_metrics.get("trigger_counts", {})
+    post_delta_eps = float(max(0.0, args.action_post_delta_eps))
+    action_post_delta_arr = (
+        np.asarray(chain_action_post_delta_norm_hist, dtype=np.float32)
+        if len(chain_action_post_delta_norm_hist) > 0
+        else np.zeros((0,), dtype=np.float32)
+    )
+    action_post_delta_ratio = (
+        float(np.mean(action_post_delta_arr > post_delta_eps))
+        if action_post_delta_arr.size > 0
+        else 0.0
+    )
+    action_post_delta_ratio_mppi = (
+        float(chain_mppi_post_delta_gt_eps_steps / max(1, mppi_action_steps))
+        if mppi_action_steps > 0
+        else 0.0
+    )
+    action_post_delta_mean_mppi = (
+        float(chain_mppi_post_delta_norm_sum / max(1, mppi_action_steps))
+        if mppi_action_steps > 0
+        else 0.0
+    )
+    cost_group_mean = {
+        k: (float(np.mean(v)) if len(v) > 0 else 0.0)
+        for k, v in chain_cost_group_hist.items()
+    }
+    goal_blocked_conf_arr = (
+        np.asarray(goal_blocked_conf_hist, dtype=np.float32)
+        if len(goal_blocked_conf_hist) > 0
+        else np.zeros((0,), dtype=np.float32)
+    )
     print(
         f"Viewer run finished. min_dist={min_dist:.3f}, collision_steps={collision_steps}, "
         f"recover_events={recover_events}, recover_collision_events={recover_collision_events}, "
         f"recover_stall_events={recover_stall_events}, progress_gate_events={progress_gate_events}, "
-        f"boundary_guard_steps={boundary_guard_steps}, waypoint_replans={waypoint_replans}, "
+        f"boundary_guard_steps={int(sup_state_steps.get('BOUNDARY_GUARD', 0))}, "
+        f"boundary_guard_events={int(sup_trigger_counts.get('boundary_guard', 0))}, "
+        f"boundary_soft_steps={boundary_soft_steps}, "
+        f"boundary_soft_events={int(sup_trigger_counts.get('boundary_soft', 0))}, "
+        f"waypoint_replans={waypoint_replans}, force_waypoint_events={force_waypoint_events}, "
         f"waypoint_active_steps={waypoint_active_steps}, waypoint_stuck_events={waypoint_stuck_events}, "
+        f"waypoint_stuck_force_events={waypoint_stuck_force_events}, "
         f"guide_replans={guide_replans}, guide_active_steps={guide_active_steps}, guide_fail_steps={guide_fail_steps}, "
         f"commit_active_steps={guide_commit_active_steps}, commit_flip_events={guide_commit_flip_events}, "
-        f"goal_direct_steps={goal_direct_steps}, adaptive_switches={adaptive_switches}, "
-        f"adaptive_steps={adaptive_mode_steps}"
+        f"target_bound_projected_steps={target_bound_projected_steps}, "
+        f"target_corridor_projected_steps={target_corridor_projected_steps}, "
+        f"target_jump_projected_steps={target_jump_projected_steps}, "
+        f"goal_direct_steps={goal_direct_steps}, spin_stall_events={int(sup_trigger_counts.get('spin_stall', 0))}, "
+        f"jam_contact_events={int(sup_trigger_counts.get('jam_contact', 0))}, "
+        f"progress_stall_events={int(sup_trigger_counts.get('progress_stall', 0))}, "
+        f"supervisor_override_steps={supervisor_override_steps}, mppi_action_steps={mppi_action_steps}, "
+        f"terminal_mppi_steps={terminal_mppi_steps}, speed_cap_applied_steps={speed_cap_applied_steps}, "
+        f"mppi_reverse_raw_steps={mppi_reverse_raw_steps}, "
+        f"nominal_reverse_suppressed_steps={nominal_reverse_suppressed_steps}, "
+        f"dock_reverse_suppressed_steps={dock_reverse_suppressed_steps}, "
+        f"dock_action_steps={dock_action_steps}, icode_fallback_triggered={icode_fallback_triggered}, "
+        f"adaptive_switches={adaptive_switches}, adaptive_steps={adaptive_mode_steps}"
+    )
+    print(
+        f"chain_summary: triggers={chain_trigger_counts}, action_src={chain_action_source_counts}, "
+        f"guide_policy={chain_guide_policy_counts}, mppi_bypassed_steps={chain_mppi_bypassed_steps}, "
+        f"post_delta_eps={post_delta_eps:.5f}, post_delta_ratio={action_post_delta_ratio:.3f}, "
+        f"post_delta_ratio_mppi={action_post_delta_ratio_mppi:.3f}, post_delta_mean_mppi={action_post_delta_mean_mppi:.4f}, "
+        f"cost_group_mean={cost_group_mean}, "
+        f"bfs_replan_success={chain_guide_bfs_replan_success}, bfs_replan_fail={chain_guide_bfs_replan_fail}, "
+        f"bfs_reachable_steps={chain_guide_bfs_reachable_steps}, bfs_unreachable_steps={chain_guide_bfs_unreachable_steps}, "
+        f"force_waypoint_events={force_waypoint_events}, trigger_reason_steps={trigger_reason_steps}, "
+        f"supervisor_summary={supervisor_metrics}"
     )
     print(f"goal_blocked_ratio={goal_blocked_steps / max(1, len(base_xy_hist) - 1):.3f}")
+    print(
+        f"goal_blocked_conf_mean={float(np.mean(goal_blocked_conf_arr)) if goal_blocked_conf_arr.size > 0 else 0.0:.3f}, "
+        f"goal_blocked_conf_p95={float(np.percentile(goal_blocked_conf_arr, 95.0)) if goal_blocked_conf_arr.size > 0 else 0.0:.3f}"
+    )
 
 
 if __name__ == "__main__":

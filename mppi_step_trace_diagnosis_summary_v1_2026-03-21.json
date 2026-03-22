@@ -1,0 +1,297 @@
+{
+  "default_6103": {
+    "metrics": {
+      "final_dist": 1.6991472244262695,
+      "min_dist": 1.6430586576461792,
+      "goal_blocked_ratio": 0.30416666666666664,
+      "mppi_steps": 128,
+      "override_steps": 112,
+      "post_delta_ratio_mppi": 0.9921875
+    },
+    "trace": {
+      "steps": 240,
+      "goal_share": 0.6958333333333333,
+      "target_switch_count": 57,
+      "target_switch_first10": [
+        1,
+        2,
+        3,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "min_dist_step": 205,
+      "tail50_progress": 0.05889308452606201
+    },
+    "event_segments": [
+      {
+        "start": 50,
+        "end": 116,
+        "len": 67,
+        "reason": "progress_stall",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 2.4327406883239746,
+        "dist_end": 2.4722349643707275,
+        "min_clearance_window": 0.8747279644012451,
+        "pre10_progress": -0.04871535301208496,
+        "during_progress": -0.03949427604675293,
+        "post10_progress": 0.034151554107666016,
+        "last5_mppi_cost_total": 1464.48974609375,
+        "last5_mppi_cost_task": 316.1297607421875,
+        "last5_mppi_cost_safety": 648.987548828125,
+        "last5_mppi_cost_control": 382.9417724609375,
+        "last5_mppi_cost_terminal": 116.4306411743164
+      },
+      {
+        "start": 195,
+        "end": 239,
+        "len": 45,
+        "reason": "near_collision",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 1.7019785642623901,
+        "dist_end": 1.6991472244262695,
+        "min_clearance_window": 0.08650517463684082,
+        "pre10_progress": 0.09959864616394043,
+        "during_progress": 0.0028313398361206055,
+        "post10_progress": 0.0017412900924682617,
+        "last5_mppi_cost_total": 770.1531372070312,
+        "last5_mppi_cost_task": 60.62909698486328,
+        "last5_mppi_cost_safety": 290.6874694824219,
+        "last5_mppi_cost_control": 361.56085205078125,
+        "last5_mppi_cost_terminal": 57.27574920654297
+      }
+    ]
+  },
+  "tuned_d_6101": {
+    "metrics": {
+      "final_dist": 1.4173027276992798,
+      "min_dist": 1.4173027276992798,
+      "goal_blocked_ratio": 0.6875,
+      "mppi_steps": 211,
+      "override_steps": 29,
+      "post_delta_ratio_mppi": 0.052132701421800945
+    },
+    "trace": {
+      "steps": 240,
+      "goal_share": 0.3375,
+      "target_switch_count": 116,
+      "target_switch_first10": [
+        1,
+        2,
+        3,
+        14,
+        15,
+        16,
+        28,
+        29,
+        30,
+        31
+      ],
+      "min_dist_step": 240,
+      "tail50_progress": 0.4109379053115845
+    },
+    "event_segments": [
+      {
+        "start": 36,
+        "end": 64,
+        "len": 29,
+        "reason": "spin_stall",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 2.523866653442383,
+        "dist_end": 2.5296213626861572,
+        "min_clearance_window": 0.7164183855056763,
+        "pre10_progress": -0.025585174560546875,
+        "during_progress": -0.005754709243774414,
+        "post10_progress": 0.005006074905395508,
+        "last5_mppi_cost_total": 1471.691162109375,
+        "last5_mppi_cost_task": 926.7008056640625,
+        "last5_mppi_cost_safety": 0.561717689037323,
+        "last5_mppi_cost_control": 309.1896057128906,
+        "last5_mppi_cost_terminal": 235.2391357421875
+      }
+    ]
+  },
+  "tuned_d_6103": {
+    "metrics": {
+      "final_dist": 1.8034157752990723,
+      "min_dist": 1.8034157752990723,
+      "goal_blocked_ratio": 0.7458333333333333,
+      "mppi_steps": 153,
+      "override_steps": 87,
+      "post_delta_ratio_mppi": 0.05228758169934641
+    },
+    "trace": {
+      "steps": 240,
+      "goal_share": 0.3958333333333333,
+      "target_switch_count": 120,
+      "target_switch_first10": [
+        1,
+        2,
+        3,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "min_dist_step": 240,
+      "tail50_progress": 0.032857537269592285
+    },
+    "event_segments": [
+      {
+        "start": 139,
+        "end": 167,
+        "len": 29,
+        "reason": "near_collision",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 1.8341017961502075,
+        "dist_end": 1.8408503532409668,
+        "min_clearance_window": 0.1628025770187378,
+        "pre10_progress": 0.038486480712890625,
+        "during_progress": -0.006748557090759277,
+        "post10_progress": 0.02980351448059082,
+        "last5_mppi_cost_total": 1031.1982421875,
+        "last5_mppi_cost_task": 663.4488525390625,
+        "last5_mppi_cost_safety": 110.72200775146484,
+        "last5_mppi_cost_control": 65.18310546875,
+        "last5_mppi_cost_terminal": 191.84420776367188
+      },
+      {
+        "start": 175,
+        "end": 203,
+        "len": 29,
+        "reason": "near_collision",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 1.8166450262069702,
+        "dist_end": 1.8247380256652832,
+        "min_clearance_window": 0.13921868801116943,
+        "pre10_progress": 0.032199859619140625,
+        "during_progress": -0.008092999458312988,
+        "post10_progress": 0.01741170883178711,
+        "last5_mppi_cost_total": 51.29201126098633,
+        "last5_mppi_cost_task": -74.82918548583984,
+        "last5_mppi_cost_safety": 7.333509922027588,
+        "last5_mppi_cost_control": 61.879615783691406,
+        "last5_mppi_cost_terminal": 56.90806198120117
+      },
+      {
+        "start": 211,
+        "end": 239,
+        "len": 29,
+        "reason": "near_collision",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 1.8105056285858154,
+        "dist_end": 1.8034157752990723,
+        "min_clearance_window": 0.11619389057159424,
+        "pre10_progress": 0.020925402641296387,
+        "during_progress": 0.007089853286743164,
+        "post10_progress": 0.0013827085494995117,
+        "last5_mppi_cost_total": 861.4019775390625,
+        "last5_mppi_cost_task": 707.6704711914062,
+        "last5_mppi_cost_safety": 4.817561149597168,
+        "last5_mppi_cost_control": 66.14286804199219,
+        "last5_mppi_cost_terminal": 82.7710952758789
+      }
+    ]
+  },
+  "tuned_d_6104": {
+    "metrics": {
+      "final_dist": 1.6547857522964478,
+      "min_dist": 1.6222155094146729,
+      "goal_blocked_ratio": 0.5333333333333333,
+      "mppi_steps": 144,
+      "override_steps": 96,
+      "post_delta_ratio_mppi": 0.09722222222222222
+    },
+    "trace": {
+      "steps": 240,
+      "goal_share": 0.4083333333333333,
+      "target_switch_count": 80,
+      "target_switch_first10": [
+        1,
+        2,
+        3,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "min_dist_step": 176,
+      "tail50_progress": 0.023899435997009277
+    },
+    "event_segments": [
+      {
+        "start": 44,
+        "end": 72,
+        "len": 29,
+        "reason": "progress_stall",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 2.519350290298462,
+        "dist_end": 2.5196170806884766,
+        "min_clearance_window": 0.8754491806030273,
+        "pre10_progress": -0.014528036117553711,
+        "during_progress": -0.00026679039001464844,
+        "post10_progress": 0.007070302963256836,
+        "last5_mppi_cost_total": 1352.694580078125,
+        "last5_mppi_cost_task": 885.8763427734375,
+        "last5_mppi_cost_safety": 0.0,
+        "last5_mppi_cost_control": 229.6807403564453,
+        "last5_mppi_cost_terminal": 237.1374969482422
+      },
+      {
+        "start": 166,
+        "end": 194,
+        "len": 29,
+        "reason": "near_collision",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 1.6773993968963623,
+        "dist_end": 1.6719937324523926,
+        "min_clearance_window": 0.12533757090568542,
+        "pre10_progress": 0.15944349765777588,
+        "during_progress": 0.0054056644439697266,
+        "post10_progress": 0.03730177879333496,
+        "last5_mppi_cost_total": 719.6842041015625,
+        "last5_mppi_cost_task": 323.49822998046875,
+        "last5_mppi_cost_safety": 10.217531204223633,
+        "last5_mppi_cost_control": 251.5193328857422,
+        "last5_mppi_cost_terminal": 134.44912719726562
+      },
+      {
+        "start": 202,
+        "end": 239,
+        "len": 38,
+        "reason": "near_collision",
+        "source": "SUPERVISOR",
+        "state_at_start": "SAFE_STOP",
+        "dist_start": 1.6436723470687866,
+        "dist_end": 1.6547857522964478,
+        "min_clearance_window": 0.108649343252182,
+        "pre10_progress": 0.03394579887390137,
+        "during_progress": -0.011113405227661133,
+        "post10_progress": -0.0021076202392578125,
+        "last5_mppi_cost_total": 108.5099868774414,
+        "last5_mppi_cost_task": -128.99411010742188,
+        "last5_mppi_cost_safety": 1.5256927013397217,
+        "last5_mppi_cost_control": 202.31405639648438,
+        "last5_mppi_cost_terminal": 33.66432571411133
+      }
+    ]
+  }
+}

@@ -1,0 +1,717 @@
+{
+  "current_run": {
+    "out_dir": "/tmp/mppi_rootcause_full_eval_20260321",
+    "summary": {
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "final_dist_mean": 3.034896993637085,
+      "mppi_steps_mean": 69.4,
+      "override_steps_mean": 170.6,
+      "goal_blocked_ratio_mean": 1.0,
+      "post_delta_ratio_mppi_mean": 0.42694887418267236,
+      "trigger_totals": {
+        "near_collision": 0,
+        "progress_stall": 0,
+        "spin_stall": 0,
+        "jam_contact": 0
+      },
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 2.971381664276123,
+          "mppi_action_steps": 68,
+          "supervisor_override_steps": 172,
+          "goal_blocked_ratio": 1.0,
+          "action_post_delta_ratio_mppi": 0.4117647058823529,
+          "near_collision": 0,
+          "progress_stall": 0,
+          "spin_stall": 0,
+          "jam_contact": 0
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 2.9113075733184814,
+          "mppi_action_steps": 75,
+          "supervisor_override_steps": 165,
+          "goal_blocked_ratio": 1.0,
+          "action_post_delta_ratio_mppi": 0.3466666666666667,
+          "near_collision": 0,
+          "progress_stall": 0,
+          "spin_stall": 0,
+          "jam_contact": 0
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 3.1212716102600098,
+          "mppi_action_steps": 64,
+          "supervisor_override_steps": 176,
+          "goal_blocked_ratio": 1.0,
+          "action_post_delta_ratio_mppi": 0.390625,
+          "near_collision": 0,
+          "progress_stall": 0,
+          "spin_stall": 0,
+          "jam_contact": 0
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 3.1184070110321045,
+          "mppi_action_steps": 67,
+          "supervisor_override_steps": 173,
+          "goal_blocked_ratio": 1.0,
+          "action_post_delta_ratio_mppi": 0.4925373134328358,
+          "near_collision": 0,
+          "progress_stall": 0,
+          "spin_stall": 0,
+          "jam_contact": 0
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 3.052117109298706,
+          "mppi_action_steps": 73,
+          "supervisor_override_steps": 167,
+          "goal_blocked_ratio": 1.0,
+          "action_post_delta_ratio_mppi": 0.4931506849315068,
+          "near_collision": 0,
+          "progress_stall": 0,
+          "spin_stall": 0,
+          "jam_contact": 0
+        }
+      ]
+    }
+  },
+  "comparison_and_chains": {
+    "date": "2026-03-21",
+    "fixed_seeds": [
+      6101,
+      6102,
+      6103,
+      6104,
+      6105
+    ],
+    "current_run_out_dir": "/tmp/mppi_rootcause_full_eval_20260321",
+    "comparison_rows": [
+      [
+        "baseline_tuned_d(历史)",
+        {
+          "reach_rate": 0.0,
+          "collision_rate": 0.0,
+          "final_dist_mean": 1.5370346546173095,
+          "mppi_steps_mean": 186.0,
+          "override_steps_mean": 54.0,
+          "post_delta_ratio_mppi_mean": 0.0545465105473469,
+          "goal_blocked_ratio_mean": 0.6908333333333333,
+          "recover_sequence_steps_mean": 52.0,
+          "trigger_counts_total": {
+            "near_collision": 6,
+            "jam_contact": 0,
+            "spin_stall": 2,
+            "progress_stall": 2
+          },
+          "per_seed": {
+            "6101": {
+              "final_dist": 1.4173027276992798,
+              "mppi_steps": 211,
+              "override_steps": 29,
+              "post_delta_ratio_mppi": 0.052132701421800945,
+              "goal_blocked_ratio": 0.6875,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 0,
+                "jam_contact": 0,
+                "spin_stall": 1,
+                "progress_stall": 0
+              }
+            },
+            "6102": {
+              "final_dist": 1.367048740386963,
+              "mppi_steps": 211,
+              "override_steps": 29,
+              "post_delta_ratio_mppi": 0.03317535545023697,
+              "goal_blocked_ratio": 0.7166666666666667,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 0,
+                "jam_contact": 0,
+                "spin_stall": 1,
+                "progress_stall": 0
+              }
+            },
+            "6103": {
+              "final_dist": 1.8034157752990723,
+              "mppi_steps": 153,
+              "override_steps": 87,
+              "post_delta_ratio_mppi": 0.05228758169934641,
+              "goal_blocked_ratio": 0.7458333333333333,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 3,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 0
+              }
+            },
+            "6104": {
+              "final_dist": 1.6547857522964478,
+              "mppi_steps": 144,
+              "override_steps": 96,
+              "post_delta_ratio_mppi": 0.09722222222222222,
+              "goal_blocked_ratio": 0.5333333333333333,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 3,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 1
+              }
+            },
+            "6105": {
+              "final_dist": 1.4426202774047852,
+              "mppi_steps": 211,
+              "override_steps": 29,
+              "post_delta_ratio_mppi": 0.037914691943127965,
+              "goal_blocked_ratio": 0.7708333333333334,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 0,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 1
+              }
+            }
+          }
+        }
+      ],
+      [
+        "stageB(历史)",
+        {
+          "reach_rate": 0.0,
+          "collision_rate": 0.0,
+          "final_dist_mean": 1.7167832612991334,
+          "mppi_steps_mean": 197.2,
+          "override_steps_mean": 42.8,
+          "post_delta_ratio_mppi_mean": 0.039962530439270845,
+          "goal_blocked_ratio_mean": 0.8574999999999999,
+          "recover_sequence_steps_mean": 40.8,
+          "trigger_counts_total": {
+            "near_collision": 10,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          },
+          "per_seed": {
+            "6101": {
+              "final_dist": 1.6783503293991089,
+              "mppi_steps": 209,
+              "override_steps": 31,
+              "post_delta_ratio_mppi": 0.05263157894736842,
+              "goal_blocked_ratio": 0.85,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 2,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 0
+              }
+            },
+            "6102": {
+              "final_dist": 1.576708197593689,
+              "mppi_steps": 211,
+              "override_steps": 29,
+              "post_delta_ratio_mppi": 0.02843601895734597,
+              "goal_blocked_ratio": 0.9,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 1,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 0
+              }
+            },
+            "6103": {
+              "final_dist": 1.7418309450149536,
+              "mppi_steps": 174,
+              "override_steps": 66,
+              "post_delta_ratio_mppi": 0.05172413793103448,
+              "goal_blocked_ratio": 0.8041666666666667,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 3,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 0
+              }
+            },
+            "6104": {
+              "final_dist": 1.772193193435669,
+              "mppi_steps": 191,
+              "override_steps": 49,
+              "post_delta_ratio_mppi": 0.04712041884816754,
+              "goal_blocked_ratio": 0.7958333333333333,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 2,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 0
+              }
+            },
+            "6105": {
+              "final_dist": 1.814833641052246,
+              "mppi_steps": 201,
+              "override_steps": 39,
+              "post_delta_ratio_mppi": 0.01990049751243781,
+              "goal_blocked_ratio": 0.9375,
+              "trigger_counts": {
+                "boundary_guard": 0,
+                "near_collision": 2,
+                "jam_contact": 0,
+                "spin_stall": 0,
+                "progress_stall": 0
+              }
+            }
+          }
+        }
+      ],
+      [
+        "rootcause_now(本次实跑)",
+        {
+          "reach_rate": 0.0,
+          "collision_rate": 0.0,
+          "final_dist_mean": 3.034896993637085,
+          "mppi_steps_mean": 69.4,
+          "override_steps_mean": 170.6,
+          "goal_blocked_ratio_mean": 1.0,
+          "post_delta_ratio_mppi_mean": 0.42694887418267236,
+          "trigger_counts_total": {
+            "near_collision": 0,
+            "progress_stall": 0,
+            "spin_stall": 0,
+            "jam_contact": 0
+          }
+        }
+      ]
+    ],
+    "failure_chains": [
+      {
+        "seed": 6101,
+        "reached_goal": false,
+        "first_boundary_guard_step": 43,
+        "trigger_reason_steps": {
+          "normal": 68,
+          "boundary_guard": 172
+        },
+        "state_steps": {
+          "NORMAL": 68,
+          "SAFE_STOP": 0,
+          "BACKUP_RECOVER": 0,
+          "ROTATE_RECOVER": 0,
+          "FORWARD_RECOVER": 0,
+          "BOUNDARY_GUARD": 172
+        },
+        "dominant_trigger_segments": [
+          {
+            "start": 43,
+            "end": 214,
+            "reason": "boundary_guard",
+            "len": 172
+          },
+          {
+            "start": 0,
+            "end": 42,
+            "reason": "normal",
+            "len": 43
+          },
+          {
+            "start": 215,
+            "end": 239,
+            "reason": "normal",
+            "len": 25
+          }
+        ],
+        "pre_boundary_cost_mean_last10_mppi_window": {
+          "task": 2304.6151123046875,
+          "safety": 6348.7552734375,
+          "control": 593.1700073242188,
+          "total": 9719.843017578125
+        },
+        "dist_at_first_boundary": 3.5935752391815186,
+        "dist_final": 2.971381664276123,
+        "action_source_around_boundary": [
+          "MPPI",
+          "MPPI",
+          "MPPI",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR"
+        ],
+        "trigger_reason_around_boundary": [
+          "normal",
+          "normal",
+          "normal",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard"
+        ],
+        "supervisor_state_around_boundary": [
+          "NORMAL",
+          "NORMAL",
+          "NORMAL",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD"
+        ],
+        "active_target_before_after": {
+          "before": [
+            1.1344497203826904,
+            3.0516624450683594
+          ],
+          "at": [
+            2.5999999046325684,
+            0.0
+          ]
+        }
+      },
+      {
+        "seed": 6102,
+        "reached_goal": false,
+        "first_boundary_guard_step": 44,
+        "trigger_reason_steps": {
+          "normal": 75,
+          "boundary_guard": 165
+        },
+        "state_steps": {
+          "NORMAL": 75,
+          "SAFE_STOP": 0,
+          "BACKUP_RECOVER": 0,
+          "ROTATE_RECOVER": 0,
+          "FORWARD_RECOVER": 0,
+          "BOUNDARY_GUARD": 165
+        },
+        "dominant_trigger_segments": [
+          {
+            "start": 44,
+            "end": 208,
+            "reason": "boundary_guard",
+            "len": 165
+          },
+          {
+            "start": 0,
+            "end": 43,
+            "reason": "normal",
+            "len": 44
+          },
+          {
+            "start": 209,
+            "end": 239,
+            "reason": "normal",
+            "len": 31
+          }
+        ],
+        "pre_boundary_cost_mean_last10_mppi_window": {
+          "task": 1798.3997680664063,
+          "safety": 6398.340600585938,
+          "control": 650.3844604492188,
+          "total": 9305.5279296875
+        },
+        "dist_at_first_boundary": 3.592252731323242,
+        "dist_final": 2.9113075733184814,
+        "action_source_around_boundary": [
+          "MPPI",
+          "MPPI",
+          "MPPI",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR"
+        ],
+        "trigger_reason_around_boundary": [
+          "normal",
+          "normal",
+          "normal",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard"
+        ],
+        "supervisor_state_around_boundary": [
+          "NORMAL",
+          "NORMAL",
+          "NORMAL",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD"
+        ],
+        "active_target_before_after": {
+          "before": [
+            1.4764653444290161,
+            -3.0777082443237305
+          ],
+          "at": [
+            2.5999999046325684,
+            0.0
+          ]
+        }
+      },
+      {
+        "seed": 6103,
+        "reached_goal": false,
+        "first_boundary_guard_step": 44,
+        "trigger_reason_steps": {
+          "normal": 64,
+          "boundary_guard": 176
+        },
+        "state_steps": {
+          "NORMAL": 64,
+          "SAFE_STOP": 0,
+          "BACKUP_RECOVER": 0,
+          "ROTATE_RECOVER": 0,
+          "FORWARD_RECOVER": 0,
+          "BOUNDARY_GUARD": 176
+        },
+        "dominant_trigger_segments": [
+          {
+            "start": 44,
+            "end": 219,
+            "reason": "boundary_guard",
+            "len": 176
+          },
+          {
+            "start": 0,
+            "end": 43,
+            "reason": "normal",
+            "len": 44
+          },
+          {
+            "start": 220,
+            "end": 239,
+            "reason": "normal",
+            "len": 20
+          }
+        ],
+        "pre_boundary_cost_mean_last10_mppi_window": {
+          "task": 1978.6671875,
+          "safety": 6300.62353515625,
+          "control": 613.4096374511719,
+          "total": 9353.561279296875
+        },
+        "dist_at_first_boundary": 3.6022050380706787,
+        "dist_final": 3.1212716102600098,
+        "action_source_around_boundary": [
+          "MPPI",
+          "MPPI",
+          "MPPI",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR"
+        ],
+        "trigger_reason_around_boundary": [
+          "normal",
+          "normal",
+          "normal",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard"
+        ],
+        "supervisor_state_around_boundary": [
+          "NORMAL",
+          "NORMAL",
+          "NORMAL",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD"
+        ],
+        "active_target_before_after": {
+          "before": [
+            1.4816100597381592,
+            -3.074282646179199
+          ],
+          "at": [
+            2.5999999046325684,
+            0.0
+          ]
+        }
+      },
+      {
+        "seed": 6104,
+        "reached_goal": false,
+        "first_boundary_guard_step": 44,
+        "trigger_reason_steps": {
+          "normal": 67,
+          "boundary_guard": 173
+        },
+        "state_steps": {
+          "NORMAL": 67,
+          "SAFE_STOP": 0,
+          "BACKUP_RECOVER": 0,
+          "ROTATE_RECOVER": 0,
+          "FORWARD_RECOVER": 0,
+          "BOUNDARY_GUARD": 173
+        },
+        "dominant_trigger_segments": [
+          {
+            "start": 44,
+            "end": 216,
+            "reason": "boundary_guard",
+            "len": 173
+          },
+          {
+            "start": 0,
+            "end": 43,
+            "reason": "normal",
+            "len": 44
+          },
+          {
+            "start": 217,
+            "end": 239,
+            "reason": "normal",
+            "len": 23
+          }
+        ],
+        "pre_boundary_cost_mean_last10_mppi_window": {
+          "task": 2296.2081787109373,
+          "safety": 5912.128247070313,
+          "control": 512.7336578369141,
+          "total": 9195.3693359375
+        },
+        "dist_at_first_boundary": 3.6005733013153076,
+        "dist_final": 3.1184070110321045,
+        "action_source_around_boundary": [
+          "MPPI",
+          "MPPI",
+          "MPPI",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR"
+        ],
+        "trigger_reason_around_boundary": [
+          "normal",
+          "normal",
+          "normal",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard"
+        ],
+        "supervisor_state_around_boundary": [
+          "NORMAL",
+          "NORMAL",
+          "NORMAL",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD"
+        ],
+        "active_target_before_after": {
+          "before": [
+            1.1580865383148193,
+            3.0662953853607178
+          ],
+          "at": [
+            2.5999999046325684,
+            0.0
+          ]
+        }
+      },
+      {
+        "seed": 6105,
+        "reached_goal": false,
+        "first_boundary_guard_step": 43,
+        "trigger_reason_steps": {
+          "normal": 73,
+          "boundary_guard": 167
+        },
+        "state_steps": {
+          "NORMAL": 73,
+          "SAFE_STOP": 0,
+          "BACKUP_RECOVER": 0,
+          "ROTATE_RECOVER": 0,
+          "FORWARD_RECOVER": 0,
+          "BOUNDARY_GUARD": 167
+        },
+        "dominant_trigger_segments": [
+          {
+            "start": 43,
+            "end": 209,
+            "reason": "boundary_guard",
+            "len": 167
+          },
+          {
+            "start": 0,
+            "end": 42,
+            "reason": "normal",
+            "len": 43
+          },
+          {
+            "start": 210,
+            "end": 239,
+            "reason": "normal",
+            "len": 30
+          }
+        ],
+        "pre_boundary_cost_mean_last10_mppi_window": {
+          "task": 2224.9340698242186,
+          "safety": 7896.24658203125,
+          "control": 674.9644409179688,
+          "total": 11272.69599609375
+        },
+        "dist_at_first_boundary": 3.5865445137023926,
+        "dist_final": 3.052117109298706,
+        "action_source_around_boundary": [
+          "MPPI",
+          "MPPI",
+          "MPPI",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR",
+          "SUPERVISOR"
+        ],
+        "trigger_reason_around_boundary": [
+          "normal",
+          "normal",
+          "normal",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard",
+          "boundary_guard"
+        ],
+        "supervisor_state_around_boundary": [
+          "NORMAL",
+          "NORMAL",
+          "NORMAL",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD",
+          "BOUNDARY_GUARD"
+        ],
+        "active_target_before_after": {
+          "before": [
+            1.080931305885315,
+            3.0693869590759277
+          ],
+          "at": [
+            2.5999999046325684,
+            0.0
+          ]
+        }
+      }
+    ]
+  }
+}

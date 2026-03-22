@@ -1,0 +1,333 @@
+{
+  "seeds": [
+    6101,
+    6102,
+    6103,
+    6104,
+    6105
+  ],
+  "summary": {
+    "baseline_tuned_d": {
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "final_dist_mean": 1.5370346546173095,
+      "mppi_steps_mean": 186.0,
+      "override_steps_mean": 54.0,
+      "post_delta_ratio_mppi_mean": 0.0545465105473469,
+      "goal_blocked_ratio_mean": 0.6908333333333333,
+      "recover_sequence_steps_mean": 52.0,
+      "trigger_counts_total": {
+        "near_collision": 6,
+        "jam_contact": 0,
+        "spin_stall": 2,
+        "progress_stall": 2
+      },
+      "per_seed": {
+        "6101": {
+          "final_dist": 1.4173027276992798,
+          "mppi_steps": 211,
+          "override_steps": 29,
+          "post_delta_ratio_mppi": 0.052132701421800945,
+          "goal_blocked_ratio": 0.6875,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 0,
+            "jam_contact": 0,
+            "spin_stall": 1,
+            "progress_stall": 0
+          }
+        },
+        "6102": {
+          "final_dist": 1.367048740386963,
+          "mppi_steps": 211,
+          "override_steps": 29,
+          "post_delta_ratio_mppi": 0.03317535545023697,
+          "goal_blocked_ratio": 0.7166666666666667,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 0,
+            "jam_contact": 0,
+            "spin_stall": 1,
+            "progress_stall": 0
+          }
+        },
+        "6103": {
+          "final_dist": 1.8034157752990723,
+          "mppi_steps": 153,
+          "override_steps": 87,
+          "post_delta_ratio_mppi": 0.05228758169934641,
+          "goal_blocked_ratio": 0.7458333333333333,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6104": {
+          "final_dist": 1.6547857522964478,
+          "mppi_steps": 144,
+          "override_steps": 96,
+          "post_delta_ratio_mppi": 0.09722222222222222,
+          "goal_blocked_ratio": 0.5333333333333333,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 1
+          }
+        },
+        "6105": {
+          "final_dist": 1.4426202774047852,
+          "mppi_steps": 211,
+          "override_steps": 29,
+          "post_delta_ratio_mppi": 0.037914691943127965,
+          "goal_blocked_ratio": 0.7708333333333334,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 0,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 1
+          }
+        }
+      }
+    },
+    "stageA": {
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "final_dist_mean": 1.8029035568237304,
+      "mppi_steps_mean": 166.4,
+      "override_steps_mean": 73.6,
+      "post_delta_ratio_mppi_mean": 0.04236354896988381,
+      "goal_blocked_ratio_mean": 0.8133333333333332,
+      "recover_sequence_steps_mean": 70.8,
+      "trigger_counts_total": {
+        "near_collision": 14,
+        "jam_contact": 0,
+        "spin_stall": 0,
+        "progress_stall": 0
+      },
+      "per_seed": {
+        "6101": {
+          "final_dist": 1.7907670736312866,
+          "mppi_steps": 175,
+          "override_steps": 65,
+          "post_delta_ratio_mppi": 0.05714285714285714,
+          "goal_blocked_ratio": 0.8166666666666667,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6102": {
+          "final_dist": 1.6807591915130615,
+          "mppi_steps": 182,
+          "override_steps": 58,
+          "post_delta_ratio_mppi": 0.03296703296703297,
+          "goal_blocked_ratio": 0.9,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 2,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6103": {
+          "final_dist": 1.8034157752990723,
+          "mppi_steps": 153,
+          "override_steps": 87,
+          "post_delta_ratio_mppi": 0.05228758169934641,
+          "goal_blocked_ratio": 0.7458333333333333,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6104": {
+          "final_dist": 1.852265477180481,
+          "mppi_steps": 153,
+          "override_steps": 87,
+          "post_delta_ratio_mppi": 0.0457516339869281,
+          "goal_blocked_ratio": 0.7083333333333334,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6105": {
+          "final_dist": 1.887310266494751,
+          "mppi_steps": 169,
+          "override_steps": 71,
+          "post_delta_ratio_mppi": 0.023668639053254437,
+          "goal_blocked_ratio": 0.8958333333333334,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        }
+      }
+    },
+    "stageB": {
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "final_dist_mean": 1.7167832612991334,
+      "mppi_steps_mean": 197.2,
+      "override_steps_mean": 42.8,
+      "post_delta_ratio_mppi_mean": 0.039962530439270845,
+      "goal_blocked_ratio_mean": 0.8574999999999999,
+      "recover_sequence_steps_mean": 40.8,
+      "trigger_counts_total": {
+        "near_collision": 10,
+        "jam_contact": 0,
+        "spin_stall": 0,
+        "progress_stall": 0
+      },
+      "per_seed": {
+        "6101": {
+          "final_dist": 1.6783503293991089,
+          "mppi_steps": 209,
+          "override_steps": 31,
+          "post_delta_ratio_mppi": 0.05263157894736842,
+          "goal_blocked_ratio": 0.85,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 2,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6102": {
+          "final_dist": 1.576708197593689,
+          "mppi_steps": 211,
+          "override_steps": 29,
+          "post_delta_ratio_mppi": 0.02843601895734597,
+          "goal_blocked_ratio": 0.9,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 1,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6103": {
+          "final_dist": 1.7418309450149536,
+          "mppi_steps": 174,
+          "override_steps": 66,
+          "post_delta_ratio_mppi": 0.05172413793103448,
+          "goal_blocked_ratio": 0.8041666666666667,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 3,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6104": {
+          "final_dist": 1.772193193435669,
+          "mppi_steps": 191,
+          "override_steps": 49,
+          "post_delta_ratio_mppi": 0.04712041884816754,
+          "goal_blocked_ratio": 0.7958333333333333,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 2,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        },
+        "6105": {
+          "final_dist": 1.814833641052246,
+          "mppi_steps": 201,
+          "override_steps": 39,
+          "post_delta_ratio_mppi": 0.01990049751243781,
+          "goal_blocked_ratio": 0.9375,
+          "trigger_counts": {
+            "boundary_guard": 0,
+            "near_collision": 2,
+            "jam_contact": 0,
+            "spin_stall": 0,
+            "progress_stall": 0
+          }
+        }
+      }
+    }
+  },
+  "trace_quality": {
+    "baseline_tuned_d": {
+      "has_trace": false,
+      "stall_events": 0,
+      "stall_effective_ratio": null,
+      "stall_false_positive_ratio": null,
+      "progress_events": 0,
+      "spin_events": 0,
+      "progress_false_positive": 0,
+      "spin_false_positive": 0,
+      "near_events_mean": null,
+      "near_reentry_interval_median": null,
+      "near_reentry_interval_min": null,
+      "stall_event_table": []
+    },
+    "stageA": {
+      "has_trace": true,
+      "stall_events": 0,
+      "stall_effective_ratio": null,
+      "stall_false_positive_ratio": null,
+      "progress_events": 0,
+      "spin_events": 0,
+      "progress_false_positive": 0,
+      "spin_false_positive": 0,
+      "near_events_mean": 2.8,
+      "near_reentry_interval_median": 36.0,
+      "near_reentry_interval_min": 36,
+      "stall_event_table": []
+    },
+    "stageB": {
+      "has_trace": true,
+      "stall_events": 0,
+      "stall_effective_ratio": null,
+      "stall_false_positive_ratio": null,
+      "progress_events": 0,
+      "spin_events": 0,
+      "progress_false_positive": 0,
+      "spin_false_positive": 0,
+      "near_events_mean": 2.0,
+      "near_reentry_interval_median": 52.0,
+      "near_reentry_interval_min": 29,
+      "stall_event_table": []
+    }
+  },
+  "delta_stageB_minus_stageA": {
+    "final_dist_mean": -0.08612029552459699,
+    "mppi_steps_mean": 30.799999999999983,
+    "override_steps_mean": -30.799999999999997,
+    "post_delta_ratio_mppi_mean": -0.002401018530612968,
+    "goal_blocked_ratio_mean": 0.04416666666666669
+  },
+  "delta_stageB_minus_tuned_d": {
+    "final_dist_mean": 0.1797486066818239,
+    "mppi_steps_mean": 11.199999999999989,
+    "override_steps_mean": -11.200000000000003,
+    "post_delta_ratio_mppi_mean": -0.014583980108076058,
+    "goal_blocked_ratio_mean": 0.16666666666666663
+  }
+}

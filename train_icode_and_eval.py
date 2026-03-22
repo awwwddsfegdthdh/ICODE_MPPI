@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from icode_dynamics import ICODEDynamics
+from state_convention import assert_meta_contract, read_npz_meta
 
 
 class TransitionDataset(Dataset):
@@ -417,6 +418,8 @@ def train(args: argparse.Namespace) -> None:
     set_seed(args.seed)
 
     bundle = np.load(args.bundle, allow_pickle=True)
+    bundle_meta = read_npz_meta(bundle)
+    assert_meta_contract(bundle_meta)
     train_ds = TransitionDataset(bundle["train__x_t"], bundle["train__u_t"], bundle["train__x_tp1"])
     val_ds = TransitionDataset(bundle["val__x_t"], bundle["val__u_t"], bundle["val__x_tp1"])
     test_ds = TransitionDataset(bundle["test__x_t"], bundle["test__u_t"], bundle["test__x_tp1"])
@@ -573,6 +576,11 @@ def train(args: argparse.Namespace) -> None:
                 "hidden_dim": args.hidden_dim,
                 "num_layers": args.num_layers,
                 "dt": args.dt,
+                "state_convention_version": str(bundle_meta["meta__state_convention_version"].reshape(-1)[0]),
+                "drive_sign": float(bundle_meta["meta__drive_sign"].reshape(-1)[0]),
+                "pose_source": str(bundle_meta["meta__pose_source"].reshape(-1)[0]),
+                "heading_source": str(bundle_meta["meta__heading_source"].reshape(-1)[0]),
+                "control_definition": str(bundle_meta["meta__control_definition"].reshape(-1)[0]),
             },
             "best_val_norm_mse": best_val_norm_mse,
             "device": str(device),

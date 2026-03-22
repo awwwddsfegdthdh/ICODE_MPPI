@@ -1,0 +1,210 @@
+{
+  "date": "2026-03-21",
+  "baseline_source": "/home/wmh/ICODE/domo/ICODE_MPPI/mppi_stage4_phaseB_convergence_round_v2_2026-03-21.json",
+  "baseline_label": "defaults_after_phaseB_round_v2",
+  "new_source": "/tmp/mppi_localminima_targetchain_waypoint_20260321/full_regression/summary.json",
+  "new_label": "localminima_targetchain_waypoint_semantic_v1",
+  "fixed_seeds": [
+    6101,
+    6102,
+    6103,
+    6104,
+    6105
+  ],
+  "aggregate": {
+    "baseline": {
+      "reach_rate": 0.6,
+      "collision_rate": 0.0,
+      "stuck_rate": 0.4,
+      "final_dist_mean": 0.747947347164154,
+      "mppi_steps_mean": 675.6,
+      "override_steps_mean": 13.4,
+      "goal_blocked_ratio_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.988262521967408
+    },
+    "new": {
+      "reach_rate": 1.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 0.0,
+      "final_dist_mean": 0.34994890093803405,
+      "mppi_steps_mean": 518.4,
+      "override_steps_mean": 0.0,
+      "goal_blocked_ratio_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.9843857296805609
+    }
+  },
+  "per_seed": [
+    {
+      "seed": 6101,
+      "baseline": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.3497409224510193,
+        "mppi_action_steps": 676,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "trigger_reason_steps": {
+          "normal": 676
+        }
+      },
+      "new": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.3499238193035126,
+        "mppi_action_steps": 388,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "waypoint_replans": 8,
+        "waypoint_active_steps": 120,
+        "waypoint_stuck_events": 5,
+        "waypoint_stuck_force_events": 1,
+        "global_guide_fail_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 388
+        }
+      },
+      "delta": {
+        "final_dist_to_goal": 0.00018289685249328613,
+        "mppi_action_steps": -288,
+        "supervisor_override_steps": 0,
+        "reached_goal_flip": false
+      }
+    },
+    {
+      "seed": 6102,
+      "baseline": {
+        "reached_goal": false,
+        "final_dist_to_goal": 1.1611545085906982,
+        "mppi_action_steps": 933,
+        "supervisor_override_steps": 67,
+        "goal_blocked_ratio": 0.0,
+        "trigger_reason_steps": {
+          "normal": 933,
+          "progress_stall": 1,
+          "recover_sequence": 66
+        }
+      },
+      "new": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.34998705983161926,
+        "mppi_action_steps": 501,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "waypoint_replans": 8,
+        "waypoint_active_steps": 120,
+        "waypoint_stuck_events": 8,
+        "waypoint_stuck_force_events": 1,
+        "global_guide_fail_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 501
+        }
+      },
+      "delta": {
+        "final_dist_to_goal": -0.811167448759079,
+        "mppi_action_steps": -432,
+        "supervisor_override_steps": -67,
+        "reached_goal_flip": true
+      }
+    },
+    {
+      "seed": 6103,
+      "baseline": {
+        "reached_goal": false,
+        "final_dist_to_goal": 1.529309868812561,
+        "mppi_action_steps": 1000,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "trigger_reason_steps": {
+          "normal": 1000
+        }
+      },
+      "new": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.34988734126091003,
+        "mppi_action_steps": 939,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "waypoint_replans": 23,
+        "waypoint_active_steps": 303,
+        "waypoint_stuck_events": 19,
+        "waypoint_stuck_force_events": 6,
+        "global_guide_fail_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 939
+        }
+      },
+      "delta": {
+        "final_dist_to_goal": -1.179422527551651,
+        "mppi_action_steps": -61,
+        "supervisor_override_steps": 0,
+        "reached_goal_flip": true
+      }
+    },
+    {
+      "seed": 6104,
+      "baseline": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.3496988117694855,
+        "mppi_action_steps": 368,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "trigger_reason_steps": {
+          "normal": 368
+        }
+      },
+      "new": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.34999704360961914,
+        "mppi_action_steps": 406,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "waypoint_replans": 0,
+        "waypoint_active_steps": 0,
+        "waypoint_stuck_events": 5,
+        "waypoint_stuck_force_events": 0,
+        "global_guide_fail_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 406
+        }
+      },
+      "delta": {
+        "final_dist_to_goal": 0.000298231840133667,
+        "mppi_action_steps": 38,
+        "supervisor_override_steps": 0,
+        "reached_goal_flip": false
+      }
+    },
+    {
+      "seed": 6105,
+      "baseline": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.3498326241970062,
+        "mppi_action_steps": 401,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "trigger_reason_steps": {
+          "normal": 401
+        }
+      },
+      "new": {
+        "reached_goal": true,
+        "final_dist_to_goal": 0.3499492406845093,
+        "mppi_action_steps": 358,
+        "supervisor_override_steps": 0,
+        "goal_blocked_ratio": 0.0,
+        "waypoint_replans": 8,
+        "waypoint_active_steps": 120,
+        "waypoint_stuck_events": 4,
+        "waypoint_stuck_force_events": 1,
+        "global_guide_fail_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 358
+        }
+      },
+      "delta": {
+        "final_dist_to_goal": 0.00011661648750305176,
+        "mppi_action_steps": -43,
+        "supervisor_override_steps": 0,
+        "reached_goal_flip": false
+      }
+    }
+  ]
+}

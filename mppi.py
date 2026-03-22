@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch
+from state_convention import canonical_drive_sign
 
 
 class DiffDriveKinematicModel(torch.nn.Module):
@@ -20,7 +21,7 @@ class DiffDriveKinematicModel(torch.nn.Module):
         self.dt = float(dt)
         self.wheel_radius = float(wheel_radius)
         self.wheel_base = float(wheel_base)
-        self.drive_sign = float(drive_sign)
+        self.drive_sign = canonical_drive_sign(float(drive_sign))
 
     def forward(self, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
         # x: [B,7], u: [B,2] where u=[dqL,dqR]
@@ -61,40 +62,47 @@ class MPPIController:
         default_obstacles: Optional[np.ndarray] = None,
         device: str = "cpu",
         u_init: Optional[np.ndarray] = None,
-        w_goal: float = 1.6,
-        w_final: float = 85.0,
-        w_progress: float = 140.0,
-        w_control: float = 0.01,
-        w_smooth: float = 0.08,
-        w_spin: float = 0.08,
-        w_collision: float = 1500.0,
-        w_near_obs: float = 3.0,
-        w_heading: float = 8.0,
-        w_reverse: float = 0.0,
-        v_forward_sign: float = 1.0,
-        w_away_goal: float = 45.0,
+        cost_version: str = "v2",
+        cost_task_goal: float = 2.8,
+        cost_task_final: float = 140.0,
+        cost_task_progress: float = 90.0,
+        cost_task_heading: float = 8.0,
+        cost_task_reverse: float = 2.5,
+        cost_task_path_track: float = 14.0,
+        cost_task_path_terminal: float = 40.0,
+        cost_task_path_progress: float = 90.0,
+        cost_task_lateral: float = 1.2,
+        cost_task_goal_visibility: float = 6.0,
+        cost_safe_collision: float = 1500.0,
+        cost_safe_near: float = 1.2,
+        cost_safe_corridor: float = 220.0,
+        cost_safe_bounds: float = 0.0,
+        cost_safe_bounds_terminal: float = 0.0,
+        cost_ctrl_effort: float = 0.01,
+        cost_ctrl_smooth: float = 0.08,
+        cost_ctrl_spin: float = 0.08,
+        cost_ctrl_wheel_diff: float = 0.02,
+        cost_terminal_progress_deficit: float = 120.0,
+        cost_terminal_near_goal_stall: float = 55.0,
+        cost_terminal_stop: float = 120.0,
+        cost_terminal_overshoot: float = 140.0,
         obs_behind_scale: float = 0.25,
         robot_radius: float = 0.28,
         obs_margin: float = 0.45,
-        w_goal_visibility: float = 6.0,
-        w_near_goal_stall: float = 55.0,
+        near_penalty_clearance: float = 0.12,
+        near_penalty_mid_clearance: float = 0.45,
+        near_penalty_hard_clearance: float = 0.20,
+        near_penalty_mid_scale: float = 0.35,
+        near_penalty_hard_scale: float = 1.20,
+        near_penalty_hard_power: float = 3.0,
+        path_corridor_half_width: float = 0.35,
         near_goal_radius: float = 0.90,
         near_goal_progress_eps: float = 0.003,
         los_margin: float = 0.10,
-        w_terminal_stop: float = 120.0,
         terminal_stop_radius: float = 0.70,
-        w_overshoot: float = 140.0,
         overshoot_tolerance: float = 0.05,
         noise_anneal_dist: float = 1.8,
         noise_anneal_min_scale: float = 0.30,
-        w_path_track: float = 14.0,
-        w_path_terminal: float = 40.0,
-        w_path_progress: float = 90.0,
-        w_path_backtrack: float = 180.0,
-        w_goal_motion_away: float = 220.0,
-        w_reverse_away: float = 160.0,
-        w_bounds: float = 0.0,
-        w_bounds_terminal: float = 0.0,
         world_x_min: float = -1.0e9,
         world_x_max: float = 1.0e9,
         world_y_min: float = -1.0e9,
@@ -130,54 +138,101 @@ class MPPIController:
             default_obstacles = np.zeros((0, 3), dtype=np.float32)
         self.default_obstacles = torch.tensor(default_obstacles, dtype=torch.float32, device=self.device)
 
-        # Cost weights
-        self.w_goal = float(w_goal)
-        self.w_final = float(w_final)
-        self.w_progress = float(w_progress)
-        self.w_control = float(w_control)
-        self.w_smooth = float(w_smooth)
-        self.w_spin = float(w_spin)
-        self.w_collision = float(w_collision)
-        self.w_near_obs = float(w_near_obs)
-        self.w_heading = float(w_heading)
-        self.w_reverse = float(w_reverse)
-        self.v_forward_sign = float(v_forward_sign)
-        self.w_away_goal = float(w_away_goal)
+        # Cost-v2 grouped weights
+        self.cost_version = str(cost_version).lower()
+        self.cost_task_goal = float(max(0.0, cost_task_goal))
+        self.cost_task_final = float(max(0.0, cost_task_final))
+        self.cost_task_progress = float(max(0.0, cost_task_progress))
+        self.cost_task_heading = float(max(0.0, cost_task_heading))
+        self.cost_task_reverse = float(max(0.0, cost_task_reverse))
+        self.cost_task_path_track = float(max(0.0, cost_task_path_track))
+        self.cost_task_path_terminal = float(max(0.0, cost_task_path_terminal))
+        self.cost_task_path_progress = float(max(0.0, cost_task_path_progress))
+        self.cost_task_lateral = float(max(0.0, cost_task_lateral))
+        self.cost_task_goal_visibility = float(max(0.0, cost_task_goal_visibility))
+
+        self.cost_safe_collision = float(max(0.0, cost_safe_collision))
+        self.cost_safe_near = float(max(0.0, cost_safe_near))
+        self.cost_safe_corridor = float(max(0.0, cost_safe_corridor))
+        self.cost_safe_bounds = float(max(0.0, cost_safe_bounds))
+        self.cost_safe_bounds_terminal = float(max(0.0, cost_safe_bounds_terminal))
+
+        self.cost_ctrl_effort = float(max(0.0, cost_ctrl_effort))
+        self.cost_ctrl_smooth = float(max(0.0, cost_ctrl_smooth))
+        self.cost_ctrl_spin = float(max(0.0, cost_ctrl_spin))
+        self.cost_ctrl_wheel_diff = float(max(0.0, cost_ctrl_wheel_diff))
+
+        self.cost_terminal_progress_deficit = float(max(0.0, cost_terminal_progress_deficit))
+        self.cost_terminal_near_goal_stall = float(max(0.0, cost_terminal_near_goal_stall))
+        self.cost_terminal_stop = float(max(0.0, cost_terminal_stop))
+        self.cost_terminal_overshoot = float(max(0.0, cost_terminal_overshoot))
+
+        # Backward-compatible aliases for existing调参与trace逻辑
+        self.w_goal = self.cost_task_goal
+        self.w_final = self.cost_task_final
+        self.w_progress = self.cost_task_progress
+        self.w_heading = self.cost_task_heading
+        self.w_reverse = self.cost_task_reverse
+        self.w_path_track = self.cost_task_path_track
+        self.w_path_terminal = self.cost_task_path_terminal
+        self.w_path_progress = self.cost_task_path_progress
+        self.w_goal_visibility = self.cost_task_goal_visibility
+        self.w_collision = self.cost_safe_collision
+        self.w_near_obs = self.cost_safe_near
+        self.w_corridor = self.cost_safe_corridor
+        self.w_bounds = self.cost_safe_bounds
+        self.w_bounds_terminal = self.cost_safe_bounds_terminal
+        self.w_control = self.cost_ctrl_effort
+        self.w_smooth = self.cost_ctrl_smooth
+        self.w_spin = self.cost_ctrl_spin
+        self.w_u_diff = self.cost_ctrl_wheel_diff
+        self.w_terminal_progress = self.cost_terminal_progress_deficit
+        self.w_near_goal_stall = self.cost_terminal_near_goal_stall
+        self.w_terminal_stop = self.cost_terminal_stop
+        self.w_overshoot = self.cost_terminal_overshoot
+
         self.obs_behind_scale = float(np.clip(obs_behind_scale, 0.0, 1.0))
-        self.w_terminal_progress = 120.0
-        self.w_backward_step = 90.0
-        self.w_lateral = 1.2
-        self.w_u_diff = 0.02
+        self.w_lateral = self.cost_task_lateral
         self.robot_radius = float(robot_radius)
         self.obs_margin = float(obs_margin)
-        self.w_goal_visibility = float(w_goal_visibility)
-        self.w_near_goal_stall = float(w_near_goal_stall)
+        # Legacy alias: historically near penalty used a single close-distance band.
+        self.near_penalty_clearance = float(max(1e-3, near_penalty_clearance))
+        # New semantics: two-layer near-obstacle shaping.
+        # - mid layer starts earlier to avoid hugging obstacle boundaries.
+        # - hard layer increases steeply at very close range.
+        self.near_penalty_hard_clearance = float(
+            max(1e-3, near_penalty_hard_clearance, self.near_penalty_clearance)
+        )
+        self.near_penalty_mid_clearance = float(
+            max(self.near_penalty_hard_clearance + 1e-3, near_penalty_mid_clearance)
+        )
+        self.near_penalty_mid_scale = float(max(0.0, near_penalty_mid_scale))
+        self.near_penalty_hard_scale = float(max(0.0, near_penalty_hard_scale))
+        self.near_penalty_hard_power = float(max(1.0, near_penalty_hard_power))
+        self.path_corridor_half_width = float(max(1e-3, path_corridor_half_width))
         self.near_goal_radius = float(near_goal_radius)
         self.near_goal_progress_eps = float(near_goal_progress_eps)
         self.los_margin = float(los_margin)
-        self.w_terminal_stop = float(w_terminal_stop)
         self.terminal_stop_radius = float(max(0.0, terminal_stop_radius))
-        self.w_overshoot = float(max(0.0, w_overshoot))
         self.overshoot_tolerance = float(max(0.0, overshoot_tolerance))
         self.noise_anneal_dist = float(max(0.0, noise_anneal_dist))
         self.noise_anneal_min_scale = float(np.clip(noise_anneal_min_scale, 0.05, 1.0))
-        self.w_path_track = float(max(0.0, w_path_track))
-        self.w_path_terminal = float(max(0.0, w_path_terminal))
-        self.w_path_progress = float(max(0.0, w_path_progress))
-        self.w_path_backtrack = float(max(0.0, w_path_backtrack))
-        self.w_goal_motion_away = float(max(0.0, w_goal_motion_away))
-        self.w_reverse_away = float(max(0.0, w_reverse_away))
-        self.w_bounds = float(max(0.0, w_bounds))
-        self.w_bounds_terminal = float(max(0.0, w_bounds_terminal))
         self.world_x_min = float(world_x_min)
         self.world_x_max = float(world_x_max)
         self.world_y_min = float(world_y_min)
         self.world_y_max = float(world_y_max)
         self.bounds_enabled = (
-            self.w_bounds > 0.0
+            self.cost_safe_bounds > 0.0
             and self.world_x_min < self.world_x_max
             and self.world_y_min < self.world_y_max
         )
+        self.last_cost_terms: Dict[str, float] = {
+            "task": 0.0,
+            "safety": 0.0,
+            "control": 0.0,
+            "terminal": 0.0,
+            "total": 0.0,
+        }
 
     def compute_cost(
         self,
@@ -188,41 +243,47 @@ class MPPIController:
         init_dist: torch.Tensor,
         init_pos_xy: torch.Tensor,
         reference_traj: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_terms: bool = False,
+    ) -> torch.Tensor | Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         # states: [K, T, D], actions: [K, T, U], target_xy: [2], obstacles: [N, 3]
+        n_rollouts = states.shape[0]
         pos = states[:, :, :2]
         dist_goal = torch.linalg.norm(pos - target_xy.view(1, 1, 2), dim=-1)  # [K, T]
-        cost = self.w_goal * torch.sum(dist_goal, dim=1)
-
         final_dist = dist_goal[:, -1]
-        cost = cost + self.w_final * final_dist
-        cost = cost + self.w_control * torch.sum(actions * actions, dim=(1, 2))
+        cost_task = torch.zeros(n_rollouts, dtype=states.dtype, device=states.device)
+        cost_safety = torch.zeros_like(cost_task)
+        cost_control = torch.zeros_like(cost_task)
+        cost_terminal = torch.zeros_like(cost_task)
+
+        if self.cost_task_goal > 0.0:
+            cost_task = cost_task + self.cost_task_goal * torch.sum(dist_goal, dim=1)
+        if self.cost_task_final > 0.0:
+            cost_task = cost_task + self.cost_task_final * final_dist
+        if self.cost_ctrl_effort > 0.0:
+            cost_control = cost_control + self.cost_ctrl_effort * torch.sum(actions * actions, dim=(1, 2))
         if actions.shape[1] > 1:
             du = actions[:, 1:, :] - actions[:, :-1, :]
-            cost = cost + self.w_smooth * torch.sum(du * du, dim=(1, 2))
+            cost_control = cost_control + self.cost_ctrl_smooth * torch.sum(du * du, dim=(1, 2))
 
         # Penalize excessive yaw-rate to prevent spinning in place.
         if states.shape[-1] > 4:
             wz = states[:, :, 4]
-            cost = cost + self.w_spin * torch.sum(wz * wz, dim=1)
+            cost_control = cost_control + self.cost_ctrl_spin * torch.sum(wz * wz, dim=1)
 
-        # Encourage heading alignment and forward progress along goal direction.
+        # Task alignment and reverse penalty.
         if states.shape[-1] > 3:
             dx = target_xy[0] - pos[:, :, 0]
             dy = target_xy[1] - pos[:, :, 1]
             goal_heading = torch.atan2(dy, dx)
             psi = states[:, :, 2]
             heading_err = torch.atan2(torch.sin(goal_heading - psi), torch.cos(goal_heading - psi))
-            cost = cost + self.w_heading * torch.sum(torch.abs(heading_err), dim=1)
+            cost_task = cost_task + self.cost_task_heading * torch.sum(torch.abs(heading_err), dim=1)
 
             v_body = states[:, :, 3]
-            # Penalize body-frame reverse motion directly, so controller prefers
-            # turning toward goal then driving forward instead of backing in.
-            v_forward = self.v_forward_sign * v_body
-            reverse_penalty = torch.relu(-v_forward)
-            cost = cost + self.w_reverse * torch.sum(reverse_penalty, dim=1)
+            reverse_penalty = torch.relu(-v_body)
+            cost_task = cost_task + self.cost_task_reverse * torch.sum(reverse_penalty, dim=1)
 
-        # Progress-to-goal-line shaping from initial position to terminal goal.
+        # Progress shaping from initial position to terminal goal.
         goal_vec = target_xy - init_pos_xy
         goal_len = torch.linalg.norm(goal_vec) + 1e-6
         goal_dir = goal_vec / goal_len
@@ -234,62 +295,50 @@ class MPPIController:
 
         along_end = along[:, -1]
         terminal_progress_deficit = torch.relu(goal_len - along_end)
-        cost = cost + self.w_terminal_progress * terminal_progress_deficit
-        cost = cost + self.w_lateral * torch.mean(lateral * lateral, dim=1)
-        if self.w_overshoot > 0.0:
+        cost_terminal = cost_terminal + self.cost_terminal_progress_deficit * terminal_progress_deficit
+        cost_task = cost_task + self.cost_task_lateral * torch.mean(lateral * lateral, dim=1)
+        if self.cost_terminal_overshoot > 0.0:
             overshoot = torch.relu(along_end - goal_len - self.overshoot_tolerance)
-            cost = cost + self.w_overshoot * (overshoot * overshoot)
+            cost_terminal = cost_terminal + self.cost_terminal_overshoot * (overshoot * overshoot)
 
-        # Path-tracking shaping (similar to reference-waypoint tracking):
-        # if a horizon reference trajectory is provided, prefer staying close to it
-        # instead of only minimizing the final goal distance.
+        ref_dir_t = None
+        # Path-tracking shaping.
         if reference_traj is not None and reference_traj.ndim == 2 and reference_traj.shape[0] >= pos.shape[1]:
             ref_xy = reference_traj[: pos.shape[1], :2].to(pos.dtype).to(self.device)
             path_err = pos - ref_xy.view(1, pos.shape[1], 2)
             path_err2 = torch.sum(path_err * path_err, dim=-1)
-            if self.w_path_track > 0.0:
-                cost = cost + self.w_path_track * torch.mean(path_err2, dim=1)
-            if self.w_path_terminal > 0.0:
-                cost = cost + self.w_path_terminal * path_err2[:, -1]
-            if pos.shape[1] > 1 and (self.w_path_progress > 0.0 or self.w_path_backtrack > 0.0):
+            if pos.shape[1] > 1:
+                ref_tangent_t = torch.zeros_like(ref_xy)
+                ref_tangent_t[:-1, :] = ref_xy[1:, :] - ref_xy[:-1, :]
+                ref_tangent_t[-1, :] = ref_tangent_t[-2, :]
+                tan_norm_t = torch.linalg.norm(ref_tangent_t, dim=-1, keepdim=True) + 1e-6
+                ref_dir_t = ref_tangent_t / tan_norm_t
+                ref_perp_t = torch.stack([-ref_dir_t[:, 1], ref_dir_t[:, 0]], dim=-1)
+                lateral_signed = torch.sum(path_err * ref_perp_t.view(1, pos.shape[1], 2), dim=-1)
+                corridor_violation = torch.relu(torch.abs(lateral_signed) - float(self.path_corridor_half_width))
+                cost_safety = cost_safety + self.cost_safe_corridor * torch.sum(corridor_violation * corridor_violation, dim=1)
+            if self.cost_task_path_track > 0.0:
+                cost_task = cost_task + self.cost_task_path_track * torch.mean(path_err2, dim=1)
+            if self.cost_task_path_terminal > 0.0:
+                cost_task = cost_task + self.cost_task_path_terminal * path_err2[:, -1]
+            if pos.shape[1] > 1 and self.cost_task_path_progress > 0.0:
                 disp = pos[:, 1:, :] - pos[:, :-1, :]  # [K,T-1,2]
                 ref_tangent = ref_xy[1:, :] - ref_xy[:-1, :]  # [T-1,2]
                 tan_norm = torch.linalg.norm(ref_tangent, dim=-1, keepdim=True) + 1e-6
                 ref_dir = ref_tangent / tan_norm
                 path_motion = torch.sum(disp * ref_dir.view(1, ref_dir.shape[0], 2), dim=-1)  # [K,T-1]
-                if self.w_path_progress > 0.0:
-                    cost = cost - self.w_path_progress * torch.sum(torch.relu(path_motion), dim=1)
-                if self.w_path_backtrack > 0.0:
-                    cost = cost + self.w_path_backtrack * torch.sum(torch.relu(-path_motion), dim=1)
-
-        if pos.shape[1] > 1 and self.w_goal_motion_away > 0.0:
-            disp = pos[:, 1:, :] - pos[:, :-1, :]  # [K,T-1,2]
-            goal_vec_step = target_xy.view(1, 1, 2) - pos[:, :-1, :]
-            goal_dir_step = goal_vec_step / (torch.linalg.norm(goal_vec_step, dim=-1, keepdim=True) + 1e-6)
-            goal_motion = torch.sum(disp * goal_dir_step, dim=-1)  # [K,T-1]
-            cost = cost + self.w_goal_motion_away * torch.sum(torch.relu(-goal_motion), dim=1)
-
-        if along.shape[1] > 1:
-            delta_along = along[:, 1:] - along[:, :-1]
-            cost = cost + self.w_backward_step * torch.sum(torch.relu(-delta_along), dim=1)
+                # Signed progress item: backward motion naturally increases cost.
+                cost_task = cost_task - self.cost_task_path_progress * torch.sum(path_motion, dim=1)
 
         # Prefer symmetric wheel speeds unless steering is necessary.
         u_diff = actions[:, :, 1] - actions[:, :, 0]
-        cost = cost + self.w_u_diff * torch.sum(u_diff * u_diff, dim=1)
+        cost_control = cost_control + self.cost_ctrl_wheel_diff * torch.sum(u_diff * u_diff, dim=1)
 
         # Keep a weak direct progress reward to stabilize optimization.
         progress = torch.clamp(init_dist - final_dist, min=0.0)
-        cost = cost - self.w_progress * progress
-        if dist_goal.shape[1] > 1 and self.w_away_goal > 0.0:
-            # Explicitly punish moving away from target step-by-step.
-            away = torch.relu(dist_goal[:, 1:] - dist_goal[:, :-1])
-            cost = cost + self.w_away_goal * torch.sum(away, dim=1)
-            if states.shape[-1] > 3 and self.w_reverse_away > 0.0:
-                v_forward_step = self.v_forward_sign * states[:, :-1, 3]
-                reverse_mask = torch.relu(-v_forward_step)
-                cost = cost + self.w_reverse_away * torch.sum(away * reverse_mask, dim=1)
+        cost_task = cost_task - self.cost_task_progress * progress
 
-        if dist_goal.shape[1] > 1 and self.w_near_goal_stall > 0.0:
+        if dist_goal.shape[1] > 1 and self.cost_terminal_near_goal_stall > 0.0:
             # Additional shaping near goal: repeatedly failing to reduce goal distance
             # in the terminal region should be penalized.
             delta_dist = dist_goal[:, :-1] - dist_goal[:, 1:]
@@ -298,14 +347,14 @@ class MPPIController:
                 (dist_goal[:, :-1] < self.near_goal_radius)
                 | (dist_goal[:, 1:] < self.near_goal_radius)
             ).to(no_progress.dtype)
-            cost = cost + self.w_near_goal_stall * torch.sum(no_progress * near_mask, dim=1)
+            cost_terminal = cost_terminal + self.cost_terminal_near_goal_stall * torch.sum(no_progress * near_mask, dim=1)
 
-        if states.shape[-1] > 4 and self.w_terminal_stop > 0.0 and self.terminal_stop_radius > 0.0:
-            v_forward_end = self.v_forward_sign * states[:, -1, 3]
+        if states.shape[-1] > 4 and self.cost_terminal_stop > 0.0 and self.terminal_stop_radius > 0.0:
+            v_forward_end = states[:, -1, 3]
             wz_end = states[:, -1, 4]
             near_terminal = (final_dist < self.terminal_stop_radius).to(v_forward_end.dtype)
             stop_pen = (v_forward_end * v_forward_end) + 0.5 * (wz_end * wz_end)
-            cost = cost + self.w_terminal_stop * near_terminal * stop_pen
+            cost_terminal = cost_terminal + self.cost_terminal_stop * near_terminal * stop_pen
 
         if obstacles.shape[0] > 0:
             obs_xy = obstacles[:, :2]  # [N, 2]
@@ -317,20 +366,48 @@ class MPPIController:
             gap = d - safe
 
             collision_penalty = torch.clamp(-gap, min=0.0)
-            cost = cost + self.w_collision * torch.sum(collision_penalty, dim=(1, 2))
+            cost_safety = cost_safety + self.cost_safe_collision * torch.sum(collision_penalty, dim=(1, 2))
 
-            # Soft near-obstacle penalty: avoid hard reciprocal spikes that can dominate
-            # goal tracking and cause backing/circling.
-            near_penalty = torch.relu(self.obs_margin - gap)
-            near_penalty = (near_penalty / max(self.obs_margin, 1e-6)) ** 2
+            # Two-layer near-obstacle penalty:
+            # 1) mid range activates earlier to avoid grazing obstacle flanks.
+            # 2) hard range rises steeply to strongly repel near-collision trajectories.
+            near_mid_band = max(self.near_penalty_mid_clearance, self.near_penalty_hard_clearance + 1e-6)
+            near_hard_band = max(self.near_penalty_hard_clearance, 1e-6)
+            near_mid = torch.relu(near_mid_band - gap) / near_mid_band
+            near_mid = near_mid * near_mid
+            near_hard = torch.relu(near_hard_band - gap) / near_hard_band
+            near_hard = torch.pow(near_hard, self.near_penalty_hard_power)
+            near_penalty = (
+                self.near_penalty_mid_scale * near_mid
+                + self.near_penalty_hard_scale * near_hard
+            )
 
             # Obstacles behind robot should be much less important than ahead.
-            if states.shape[-1] > 2:
-                psi = states[:, :, 2]
-                heading = torch.stack([torch.cos(psi), torch.sin(psi)], dim=-1)  # [K,T,2]
+            if states.shape[-1] > 2 or pos.shape[1] > 1:
+                if states.shape[-1] > 2:
+                    psi = states[:, :, 2]
+                    heading = torch.stack([torch.cos(psi), torch.sin(psi)], dim=-1)  # [K,T,2]
+                else:
+                    heading = torch.zeros((states.shape[0], states.shape[1], 2), dtype=states.dtype, device=states.device)
+                    heading[..., 0] = 1.0
+                if pos.shape[1] > 1:
+                    disp = pos[:, 1:, :] - pos[:, :-1, :]  # [K,T-1,2]
+                    disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
+                    disp_dir = disp / (disp_norm + 1e-6)
+                    move_dir = torch.cat([heading[:, :1, :], disp_dir], dim=1)
+                    low_motion = torch.cat(
+                        [
+                            torch.zeros((disp.shape[0], 1, 1), dtype=torch.bool, device=disp.device),
+                            disp_norm < 1e-4,
+                        ],
+                        dim=1,
+                    )
+                    motion_dir = torch.where(low_motion, heading, move_dir)
+                else:
+                    motion_dir = heading
                 obs_vec = obs_xy.view(1, 1, -1, 2) - pos[:, :, None, :]  # [K,T,N,2]
                 obs_dist = torch.linalg.norm(obs_vec, dim=-1) + 1e-6  # [K,T,N]
-                cos_to_obs = torch.sum(heading[:, :, None, :] * obs_vec, dim=-1) / obs_dist
+                cos_to_obs = torch.sum(motion_dir[:, :, None, :] * obs_vec, dim=-1) / obs_dist
                 front_weight = torch.where(
                     cos_to_obs >= 0.0,
                     torch.ones_like(cos_to_obs),
@@ -338,9 +415,9 @@ class MPPIController:
                 )
                 near_penalty = near_penalty * front_weight
 
-            cost = cost + self.w_near_obs * torch.sum(near_penalty, dim=(1, 2))
+            cost_safety = cost_safety + self.cost_safe_near * torch.sum(near_penalty, dim=(1, 2))
 
-            if self.w_goal_visibility > 0.0:
+            if self.cost_task_goal_visibility > 0.0:
                 # Reward trajectories that keep line-of-sight to goal,
                 # with higher importance near terminal region.
                 p = pos[:, :, None, :]  # [K,T,1,2]
@@ -360,7 +437,7 @@ class MPPIController:
 
                 near_scale = torch.clamp((self.near_goal_radius - dist_goal) / max(self.near_goal_radius, 1e-6), 0.0, 1.0)
                 vis_reward = (1.0 - blocked_any) * (0.6 + 0.4 * near_scale)
-                cost = cost - self.w_goal_visibility * torch.sum(vis_reward, dim=1)
+                cost_task = cost_task - self.cost_task_goal_visibility * torch.sum(vis_reward, dim=1)
 
         if self.bounds_enabled:
             x = pos[:, :, 0]
@@ -370,11 +447,21 @@ class MPPIController:
             vy_low = torch.relu(self.world_y_min - y)
             vy_high = torch.relu(y - self.world_y_max)
             vbound = vx_low + vx_high + vy_low + vy_high
-            cost = cost + self.w_bounds * torch.sum(vbound * vbound, dim=1)
-            if self.w_bounds_terminal > 0.0:
-                cost = cost + self.w_bounds_terminal * (vbound[:, -1] * vbound[:, -1])
+            cost_safety = cost_safety + self.cost_safe_bounds * torch.sum(vbound * vbound, dim=1)
+            if self.cost_safe_bounds_terminal > 0.0:
+                cost_safety = cost_safety + self.cost_safe_bounds_terminal * (vbound[:, -1] * vbound[:, -1])
 
-        return cost
+        total_cost = cost_task + cost_safety + cost_control + cost_terminal
+        if return_terms:
+            terms = {
+                "task": cost_task,
+                "safety": cost_safety,
+                "control": cost_control,
+                "terminal": cost_terminal,
+                "total": total_cost,
+            }
+            return total_cost, terms
+        return total_cost
 
     def rollout(self, init_state: torch.Tensor, u_samples: torch.Tensor) -> torch.Tensor:
         states = torch.zeros(self.K, self.T, self.model.state_dim, dtype=torch.float32, device=self.device)
@@ -427,7 +514,7 @@ class MPPIController:
         u_samples = torch.max(torch.min(u_samples, self.action_high.view(1, 1, -1)), self.action_low.view(1, 1, -1))
 
         states = self.rollout(state, u_samples)
-        costs = self.compute_cost(
+        costs, terms = self.compute_cost(
             states=states,
             actions=u_samples,
             target_xy=target_xy,
@@ -435,7 +522,15 @@ class MPPIController:
             init_dist=init_dist,
             init_pos_xy=init_pos_xy,
             reference_traj=ref_t,
+            return_terms=True,
         )
+        self.last_cost_terms = {
+            "task": float(torch.mean(terms["task"]).item()),
+            "safety": float(torch.mean(terms["safety"]).item()),
+            "control": float(torch.mean(terms["control"]).item()),
+            "terminal": float(torch.mean(terms["terminal"]).item()),
+            "total": float(torch.mean(terms["total"]).item()),
+        }
 
         beta = torch.min(costs)
         weights = torch.exp(-(costs - beta) / max(self.lambda_, 1e-6))

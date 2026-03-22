@@ -3,14 +3,18 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
+from state_convention import (
+    CONTROL_DEFINITION,
+    STATE_CONVENTION_VERSION,
+    canonical_drive_sign,
+    convention_as_meta,
+    wrap_to_pi,
+    world_to_body,
+)
 
 
-def world_to_body(vec_xy: np.ndarray, yaw: np.ndarray) -> np.ndarray:
-    cos_yaw = np.cos(yaw)
-    sin_yaw = np.sin(yaw)
-    x_body = cos_yaw * vec_xy[:, 0] + sin_yaw * vec_xy[:, 1]
-    y_body = -sin_yaw * vec_xy[:, 0] + cos_yaw * vec_xy[:, 1]
-    return np.stack([x_body, y_body], axis=1)
+def _world_to_body_batch(vec_xy: np.ndarray, yaw: np.ndarray) -> np.ndarray:
+    return world_to_body(vec_xy, yaw)
 
 
 def sanitize_ranges(ranges: np.ndarray, default_far: float) -> np.ndarray:
@@ -18,10 +22,6 @@ def sanitize_ranges(ranges: np.ndarray, default_far: float) -> np.ndarray:
     invalid = (~np.isfinite(out)) | (out <= 0.0)
     out[invalid] = default_far
     return out
-
-
-def wrap_to_pi(angle: np.ndarray) -> np.ndarray:
-    return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 
 def get_array_or_default(
@@ -49,6 +49,7 @@ def integrate_diff_drive_odometry(
     wheel_radius: float,
     wheel_base: float,
     yaw_blend_alpha: float,
+    drive_sign: float,
     init_pose_by_episode: Optional[np.ndarray],
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     n = sim_time.shape[0]
@@ -65,7 +66,7 @@ def integrate_diff_drive_odometry(
         dq_l = float(wheel_vel[i, 0])
         dq_r = float(wheel_vel[i, 1])
 
-        v_now = wheel_radius * 0.5 * (dq_r + dq_l)
+        v_now = float(drive_sign) * wheel_radius * 0.5 * (dq_r + dq_l)
         wz_wheel = wheel_radius * (dq_r - dq_l) / wheel_base
         imu_wz = float(imu_gyro[i, 2]) if imu_gyro.shape[1] >= 3 else wz_wheel
         if not np.isfinite(imu_wz):
@@ -126,6 +127,16 @@ def extract_goal_and_obstacles(src: np.lib.npyio.NpzFile) -> Tuple[np.ndarray, n
 
 def convert_dataset(args: argparse.Namespace) -> None:
     src = np.load(args.input, allow_pickle=True)
+    src_drive_sign = None
+    if "meta__drive_sign" in src.files:
+        try:
+            src_drive_sign = float(src["meta__drive_sign"].reshape(-1)[0])
+        except Exception:
+            src_drive_sign = None
+    effective_drive_sign = args.drive_sign if args.drive_sign is not None else src_drive_sign
+    if effective_drive_sign is None:
+        effective_drive_sign = -1.0
+    effective_drive_sign = canonical_drive_sign(float(effective_drive_sign))
 
     raw_episode = src["raw__episode"].astype(np.int32)
     raw_step = src["raw__step"].astype(np.int32)
@@ -161,6 +172,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
             wheel_radius=args.wheel_radius,
             wheel_base=args.wheel_base,
             yaw_blend_alpha=args.yaw_blend_alpha,
+            drive_sign=effective_drive_sign,
             init_pose_by_episode=init_pose_by_episode,
         )
 
@@ -176,7 +188,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
         y_odom = joint_pos[:, 1].astype(np.float32)
         psi_odom = wrap_to_pi(joint_pos[:, 2]).astype(np.float32)
 
-        v_body_xy = world_to_body(np.stack([joint_vel[:, 0], joint_vel[:, 1]], axis=1), psi_odom)
+        v_body_xy = _world_to_body_batch(np.stack([joint_vel[:, 0], joint_vel[:, 1]], axis=1), psi_odom)
         v_body = v_body_xy[:, 0].astype(np.float32)
         wz_body = joint_vel[:, 2].astype(np.float32)
 
@@ -194,7 +206,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
     target_pos_gt, obs_pos_gt = extract_goal_and_obstacles(src)
 
     goal_delta_world = target_pos_gt[:, :2] - np.stack([x_odom, y_odom], axis=1)
-    goal_rel_body = world_to_body(goal_delta_world, psi_odom)
+    goal_rel_body = _world_to_body_batch(goal_delta_world, psi_odom)
     goal_dist = np.linalg.norm(goal_rel_body, axis=1)
     goal_heading_err = np.arctan2(goal_rel_body[:, 1], goal_rel_body[:, 0])
 
@@ -249,6 +261,9 @@ def convert_dataset(args: argparse.Namespace) -> None:
         "meta__wheel_radius": np.array([args.wheel_radius], dtype=np.float32),
         "meta__wheel_base": np.array([args.wheel_base], dtype=np.float32),
         "meta__yaw_blend_alpha": np.array([args.yaw_blend_alpha], dtype=np.float32),
+        "meta__state_convention_version": np.array([STATE_CONVENTION_VERSION], dtype=object),
+        "meta__drive_sign": np.array([effective_drive_sign], dtype=np.float32),
+        "meta__control_definition": np.array([CONTROL_DEFINITION], dtype=object),
         "meta__state_est_fields": np.array(
             ["x_odom", "y_odom", "psi_odom", "v_body", "wz_body", "dqL", "dqR"],
             dtype=object,
@@ -280,9 +295,9 @@ def convert_dataset(args: argparse.Namespace) -> None:
         "raw__touch_front_force": touch_force,
         "raw__lidar_triplet": lidar_triplet,
         # derived layer
-        "derived__goal_rel_body": goal_rel_body.astype(np.float32),
+        "derived__goal_rel_body_from_odom_yaw": goal_rel_body.astype(np.float32),
         "derived__goal_dist": goal_dist.astype(np.float32),
-        "derived__goal_heading_err": goal_heading_err.astype(np.float32),
+        "derived__goal_heading_err_from_odom_yaw": goal_heading_err.astype(np.float32),
         "derived__depth_sector_min": depth_sector_min.astype(np.float32),
         "derived__free_corridor_width": free_corridor_width.astype(np.float32),
         "derived__depth_collision_flag": depth_collision_flag.astype(np.float32),
@@ -331,6 +346,22 @@ def convert_dataset(args: argparse.Namespace) -> None:
         save_dict["raw__distance_image"] = src["raw__distance_image"]
     if "raw__depth_valid_mask" in src.files:
         save_dict["raw__depth_valid_mask"] = src["raw__depth_valid_mask"]
+    for k in (
+        "raw__goal_rel_body",
+        "raw__goal_dist",
+        "raw__goal_heading_err",
+        "raw__depth_sector_min",
+        "raw__front_clearance",
+        "raw__corridor_width",
+        "raw__sensor_collision_flag",
+        "raw__recover_trigger",
+    ):
+        if k in src.files:
+            save_dict[k] = src[k]
+    if "raw__goal_rel_body" in src.files:
+        save_dict["raw__goal_rel_body_from_base_yaw"] = src["raw__goal_rel_body"].astype(np.float32)
+    if "raw__goal_heading_err" in src.files:
+        save_dict["raw__goal_heading_err_from_base_yaw"] = src["raw__goal_heading_err"].astype(np.float32)
     if "meta__camera_intrinsics" in src.files:
         save_dict["meta__camera_intrinsics"] = src["meta__camera_intrinsics"]
     if "meta__mujoco_gl_backend" in src.files:
@@ -357,6 +388,20 @@ def convert_dataset(args: argparse.Namespace) -> None:
         save_dict["meta__ctrl_noise_std"] = src["meta__ctrl_noise_std"]
     if "meta__ctrl_resample_prob" in src.files:
         save_dict["meta__ctrl_resample_prob"] = src["meta__ctrl_resample_prob"]
+    if "meta__pose_source" in src.files:
+        save_dict["meta__pose_source"] = src["meta__pose_source"]
+    if "meta__heading_source" in src.files:
+        save_dict["meta__heading_source"] = src["meta__heading_source"]
+    if "meta__yaw_source" in src.files:
+        save_dict["meta__yaw_source"] = src["meta__yaw_source"]
+    save_dict.update(
+        convention_as_meta(
+            drive_sign=float(effective_drive_sign),
+            pose_source=str(save_dict.get("meta__pose_source", np.array(["odom"], dtype=object)).reshape(-1)[0]),
+            heading_source=str(save_dict.get("meta__heading_source", np.array(["base"], dtype=object)).reshape(-1)[0]),
+            yaw_source="odom_yaw",
+        )
+    )
 
     np.savez_compressed(args.output, **save_dict)
     print(f"Saved converted multilayer dataset to: {args.output}")
@@ -374,6 +419,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--touch-force-threshold", type=float, default=1e-5)
     parser.add_argument("--wheel-radius", type=float, default=0.085)
     parser.add_argument("--wheel-base", type=float, default=0.37)
+    parser.add_argument("--drive-sign", type=float, default=None, help="Override drive sign (+1/-1). Default: use source meta.")
     parser.add_argument(
         "--yaw-blend-alpha",
         type=float,

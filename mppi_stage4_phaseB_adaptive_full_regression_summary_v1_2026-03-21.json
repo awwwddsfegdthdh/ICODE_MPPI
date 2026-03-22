@@ -1,0 +1,4431 @@
+{
+  "date": "2026-03-21",
+  "out_dir": "/tmp/mppi_stage4_phaseB_adaptive_20260321",
+  "fixed_seeds": [
+    6101,
+    6102,
+    6103,
+    6104,
+    6105
+  ],
+  "results": {
+    "r0_baseline_current": {
+      "label": "r0_baseline_current",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 0.952117657661438,
+      "mppi_steps_mean": 187.8,
+      "override_steps_mean": 52.2,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.1761418676110619,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.1458302736282349,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              954.3143920898438,
+              838.9349365234375,
+              959.6649780273438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              457.37249755859375,
+              460.0389099121094,
+              450.9948425292969,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1630.924560546875,
+              1478.111572265625,
+              1641.358642578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6585480570793152,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.12796208530805686,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              998.4744262695312,
+              873.6905517578125,
+              986.6822509765625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              400.4386291503906,
+              409.8133850097656,
+              405.546630859375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1627.176513671875,
+              1471.3280029296875,
+              1631.9105224609375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9890890121459961,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.7999999523162842,
+                0.0
+              ],
+              [
+                2.25,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1249.0035400390625,
+              1112.048095703125,
+              1194.6864013671875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              417.5074462890625,
+              429.2499084472656,
+              469.85186767578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1891.30908203125,
+              1721.0860595703125,
+              1891.0162353515625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9887079000473022,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.18681318681318682,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1168.266845703125,
+              1053.807373046875,
+              1174.7626953125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              409.6180419921875,
+              403.1247253417969,
+              388.94805908203125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1795.3343505859375,
+              1638.4630126953125,
+              1798.6790771484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9784130454063416,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.17032967032967034,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1015.5823364257812,
+              902.228271484375,
+              1019.0778198242188,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              373.10821533203125,
+              371.653564453125,
+              366.90057373046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1618.595458984375,
+              1463.818603515625,
+              1627.509521484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    },
+    "b1_a_conf_strict": {
+      "label": "b1_a_conf_strict",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 0.952117657661438,
+      "mppi_steps_mean": 187.8,
+      "override_steps_mean": 52.2,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.1761418676110619,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.1458302736282349,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              954.3143920898438,
+              838.9349365234375,
+              959.6649780273438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              457.37249755859375,
+              460.0389099121094,
+              450.9948425292969,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1630.924560546875,
+              1478.111572265625,
+              1641.358642578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6585480570793152,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.12796208530805686,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              998.4744262695312,
+              873.6905517578125,
+              986.6822509765625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              400.4386291503906,
+              409.8133850097656,
+              405.546630859375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1627.176513671875,
+              1471.3280029296875,
+              1631.9105224609375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9890890121459961,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.7999999523162842,
+                0.0
+              ],
+              [
+                2.25,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1249.0035400390625,
+              1112.048095703125,
+              1194.6864013671875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              417.5074462890625,
+              429.2499084472656,
+              469.85186767578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1891.30908203125,
+              1721.0860595703125,
+              1891.0162353515625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9887079000473022,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.18681318681318682,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1168.266845703125,
+              1053.807373046875,
+              1174.7626953125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              409.6180419921875,
+              403.1247253417969,
+              388.94805908203125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1795.3343505859375,
+              1638.4630126953125,
+              1798.6790771484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9784130454063416,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.17032967032967034,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1015.5823364257812,
+              902.228271484375,
+              1019.0778198242188,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              373.10821533203125,
+              371.653564453125,
+              366.90057373046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1618.595458984375,
+              1463.818603515625,
+              1627.509521484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    },
+    "b1_b_map_occ_up": {
+      "label": "b1_b_map_occ_up",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 0.9474514245986938,
+      "mppi_steps_mean": 187.8,
+      "override_steps_mean": 52.2,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.1761418676110619,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.1458302736282349,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              954.3143920898438,
+              838.9349365234375,
+              959.6649780273438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              457.37249755859375,
+              460.0389099121094,
+              450.9948425292969,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1630.924560546875,
+              1478.111572265625,
+              1641.358642578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6585480570793152,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.12796208530805686,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              998.4744262695312,
+              873.6905517578125,
+              986.6822509765625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              400.4386291503906,
+              409.8133850097656,
+              405.546630859375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1627.176513671875,
+              1471.3280029296875,
+              1631.9105224609375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9890891313552856,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.7999999523162842,
+                0.0
+              ],
+              [
+                2.25,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1249.0035400390625,
+              1112.048095703125,
+              1194.6864013671875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              417.5074462890625,
+              429.2499084472656,
+              469.85186767578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1891.30908203125,
+              1721.0860595703125,
+              1891.0162353515625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.0038588047027588,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.18681318681318682,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1168.266845703125,
+              1053.807373046875,
+              1174.7626953125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              409.6180419921875,
+              403.1247253417969,
+              388.94805908203125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1795.3343505859375,
+              1638.4630126953125,
+              1798.6790771484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9399308562278748,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.17032967032967034,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1015.5823364257812,
+              902.228271484375,
+              1019.0778198242188,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              373.10821533203125,
+              371.653564453125,
+              366.90057373046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1618.595458984375,
+              1463.818603515625,
+              1627.509521484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    },
+    "b2_a_boundary_relax": {
+      "label": "b2_a_boundary_relax",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 0.9474514245986938,
+      "mppi_steps_mean": 187.8,
+      "override_steps_mean": 52.2,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.1761418676110619,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.1458302736282349,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              954.3143920898438,
+              838.9349365234375,
+              959.6649780273438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              457.37249755859375,
+              460.0389099121094,
+              450.9948425292969,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1630.924560546875,
+              1478.111572265625,
+              1641.358642578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6585480570793152,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.12796208530805686,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              998.4744262695312,
+              873.6905517578125,
+              986.6822509765625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              400.4386291503906,
+              409.8133850097656,
+              405.546630859375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1627.176513671875,
+              1471.3280029296875,
+              1631.9105224609375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9890891313552856,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1978021978021978,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.7999999523162842,
+                0.0
+              ],
+              [
+                2.25,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1249.0035400390625,
+              1112.048095703125,
+              1194.6864013671875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              417.5074462890625,
+              429.2499084472656,
+              469.85186767578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1891.30908203125,
+              1721.0860595703125,
+              1891.0162353515625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.0038588047027588,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.18681318681318682,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1168.266845703125,
+              1053.807373046875,
+              1174.7626953125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              409.6180419921875,
+              403.1247253417969,
+              388.94805908203125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1795.3343505859375,
+              1638.4630126953125,
+              1798.6790771484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9399308562278748,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.17032967032967034,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.1499998569488525,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.299999952316284,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1015.5823364257812,
+              902.228271484375,
+              1019.0778198242188,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              373.10821533203125,
+              371.653564453125,
+              366.90057373046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1618.595458984375,
+              1463.818603515625,
+              1627.509521484375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    },
+    "b2_b_boundary_target_relax": {
+      "label": "b2_b_boundary_target_relax",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 1.0380555391311646,
+      "mppi_steps_mean": 182.0,
+      "override_steps_mean": 58.0,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 0.0,
+      "post_delta_ratio_mppi_mean": 0.19560439560439558,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.0945961475372314,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.21428571428571427,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.049999952316284,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.4000000953674316,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              926.3025512695312,
+              833.5480346679688,
+              982.3574829101562,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              452.6209411621094,
+              466.6402282714844,
+              457.61395263671875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1586.400146484375,
+              1479.2164306640625,
+              1682.55908203125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.0572673082351685,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1813186813186813,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.049999952316284,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.4000000953674316,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              965.3367309570312,
+              869.8448486328125,
+              1013.1825561523438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              400.8459777832031,
+              411.0195617675781,
+              405.7623291015625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1582.371826171875,
+              1468.410888671875,
+              1670.4686279296875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9697596430778503,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.21428571428571427,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.049999952316284,
+                0.0
+              ],
+              [
+                1.7999999523162842,
+                0.0
+              ],
+              [
+                2.3499999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1218.135986328125,
+              1112.0548095703125,
+              1225.3707275390625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              417.5062561035156,
+              428.9033203125,
+              469.5287170410156,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1848.44091796875,
+              1720.7535400390625,
+              1933.3782958984375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.9902581572532654,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.16483516483516483,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.049999952316284,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.4000000953674316,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1137.6787109375,
+              1054.0576171875,
+              1205.7928466796875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              409.3964538574219,
+              402.8498840332031,
+              388.852294921875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1752.5389404296875,
+              1638.412353515625,
+              1841.6151123046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 1.0783964395523071,
+          "mppi_action_steps": 182,
+          "supervisor_override_steps": 58,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.2032967032967033,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 182,
+            "jam_contact": 2,
+            "recover_sequence": 56
+          },
+          "failure_chain": {
+            "first_fail_step": 17,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.049999952316284,
+                0.0
+              ],
+              [
+                1.850000023841858,
+                0.0
+              ],
+              [
+                2.4000000953674316,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              984.6160278320312,
+              902.115234375,
+              1049.87548828125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              373.1094665527344,
+              371.608642578125,
+              366.6365661621094,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1575.6300048828125,
+              1463.6650390625,
+              1670.0498046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    },
+    "b2_c_jam_relax1": {
+      "label": "b2_c_jam_relax1",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 0.6442875623703003,
+      "mppi_steps_mean": 211.0,
+      "override_steps_mean": 29.0,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 1.893939479487017e-05,
+      "post_delta_ratio_mppi_mean": 0.14786729857819902,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.5707382559776306,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.13270142180094788,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              954.7265625,
+              934.1403198242188,
+              908.7006225585938,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              415.26409912109375,
+              403.97772216796875,
+              399.5086975097656,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1630.2515869140625,
+              1596.06591796875,
+              1564.3721923828125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6841251254081726,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.14691943127962084,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              962.6973266601562,
+              937.8286743164062,
+              910.4115600585938,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              389.4439697265625,
+              377.99005126953125,
+              372.1854553222656,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1613.95654296875,
+              1575.5389404296875,
+              1539.619873046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.5650208592414856,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.14691943127962084,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              1218.9793701171875,
+              1193.7900390625,
+              954.5867919921875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              436.49188232421875,
+              432.814453125,
+              426.81500244140625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1916.8043212890625,
+              1886.85205078125,
+              1639.1689453125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.62679523229599,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 9.469697397435084e-05,
+          "action_post_delta_ratio_mppi": 0.12322274881516587,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              920.7637329101562,
+              900.8688354492188,
+              868.1903686523438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              394.0535888671875,
+              381.1689453125,
+              387.577880859375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1573.294677734375,
+              1539.510009765625,
+              1508.8818359375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.7747583389282227,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1895734597156398,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              966.5848388671875,
+              937.8792114257812,
+              915.05810546875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              396.3419494628906,
+              395.957275390625,
+              389.93707275390625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1626.1968994140625,
+              1594.8515625,
+              1563.2281494140625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    },
+    "b2_d_jam_relax2": {
+      "label": "b2_d_jam_relax2",
+      "reach_rate": 0.0,
+      "collision_rate": 0.0,
+      "stuck_rate": 1.0,
+      "final_dist_mean": 0.652813172340393,
+      "mppi_steps_mean": 211.0,
+      "override_steps_mean": 29.0,
+      "goal_blocked_ratio_mean": 0.0,
+      "goal_blocked_conf_mean": 1.893939479487017e-05,
+      "post_delta_ratio_mppi_mean": 0.14786729857819902,
+      "boundary_guard_steps_mean": 0.0,
+      "boundary_soft_steps_mean": 0.0,
+      "per_seed": [
+        {
+          "seed": 6101,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.5707382559776306,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.13270142180094788,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              954.7265625,
+              934.1403198242188,
+              908.7006225585938,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              415.26409912109375,
+              403.97772216796875,
+              399.5086975097656,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1630.2515869140625,
+              1596.06591796875,
+              1564.3721923828125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6102,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6841251254081726,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.14691943127962084,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              962.6973266601562,
+              937.8286743164062,
+              910.4115600585938,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              389.4439697265625,
+              377.99005126953125,
+              372.1854553222656,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1613.95654296875,
+              1575.5389404296875,
+              1539.619873046875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6103,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.6076489090919495,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.14691943127962084,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 28,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              879.6744384765625,
+              866.7238159179688,
+              852.36767578125,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              413.4774475097656,
+              396.2131652832031,
+              380.3951110839844,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1544.6334228515625,
+              1513.8804931640625,
+              1483.6190185546875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6104,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.62679523229599,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 9.469697397435084e-05,
+          "action_post_delta_ratio_mppi": 0.12322274881516587,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              920.7637329101562,
+              900.8688354492188,
+              868.1903686523438,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              394.0535888671875,
+              381.1689453125,
+              387.577880859375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1573.294677734375,
+              1539.510009765625,
+              1508.8818359375,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        },
+        {
+          "seed": 6105,
+          "reached_goal": false,
+          "collision_steps": 0,
+          "final_dist_to_goal": 0.7747583389282227,
+          "mppi_action_steps": 211,
+          "supervisor_override_steps": 29,
+          "goal_blocked_ratio": 0.0,
+          "goal_blocked_conf_mean": 0.0,
+          "action_post_delta_ratio_mppi": 0.1895734597156398,
+          "boundary_guard_steps": 0,
+          "boundary_soft_steps": 0,
+          "trigger_reason_steps": {
+            "normal": 211,
+            "jam_contact": 1,
+            "recover_sequence": 28
+          },
+          "failure_chain": {
+            "first_fail_step": 23,
+            "action_source_around": [
+              "MPPI",
+              "MPPI",
+              "MPPI",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR",
+              "SUPERVISOR"
+            ],
+            "trigger_reason_around": [
+              "normal",
+              "normal",
+              "normal",
+              "jam_contact",
+              "recover_sequence",
+              "recover_sequence",
+              "recover_sequence"
+            ],
+            "boundary_mode_around": [
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE",
+              "NONE"
+            ],
+            "goal_blocked_conf_around": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "active_target_xy_around": [
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ],
+              [
+                2.5999999046325684,
+                0.0
+              ]
+            ],
+            "cost_task_around": [
+              966.5848388671875,
+              937.8792114257812,
+              915.05810546875,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_safety_around": [
+              0.0,
+              0.0,
+              0.0,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_control_around": [
+              396.3419494628906,
+              395.957275390625,
+              389.93707275390625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "cost_total_around": [
+              1626.1968994140625,
+              1594.8515625,
+              1563.2281494140625,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "best_label": "b2_c_jam_relax1"
+}

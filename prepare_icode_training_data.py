@@ -1,12 +1,15 @@
 import argparse
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Mapping, Tuple
 
 import numpy as np
+from state_convention import assert_meta_contract, merge_and_validate_meta, read_npz_meta
 
 
-def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Mapping[str, object]]:
     data = np.load(path, allow_pickle=True)
+    meta = read_npz_meta(data)
+    assert_meta_contract(meta)
 
     if "icode__x_t" not in data.files or "icode__u_t" not in data.files:
         raise KeyError(f"{path} missing icode__x_t or icode__u_t")
@@ -23,6 +26,7 @@ def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray,
             np.zeros((0, u.shape[1]), dtype=np.float32),
             np.zeros((0, x.shape[1]), dtype=np.float32),
             np.zeros((0,), dtype=np.float32),
+            meta,
         )
 
     same_episode = ep[1:] == ep[:-1]
@@ -45,7 +49,7 @@ def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray,
     else:
         dt = np.zeros((x_t.shape[0],), dtype=np.float32)
 
-    return x_t, u_t, x_tp1, dt
+    return x_t, u_t, x_tp1, dt, meta
 
 
 def safe_std(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
@@ -59,10 +63,12 @@ def build_dataset(args: argparse.Namespace) -> None:
     us: List[np.ndarray] = []
     ys: List[np.ndarray] = []
     dts: List[np.ndarray] = []
+    metas: List[Mapping[str, object]] = []
 
     for p in args.inputs:
-        x_t, u_t, x_tp1, dt = load_transitions_from_converted(p)
+        x_t, u_t, x_tp1, dt, meta = load_transitions_from_converted(p)
         print(f"Loaded {p}: transitions={x_t.shape[0]}")
+        metas.append(meta)
         if x_t.shape[0] == 0:
             continue
         xs.append(x_t)
@@ -72,6 +78,7 @@ def build_dataset(args: argparse.Namespace) -> None:
 
     if not xs:
         raise RuntimeError("No valid transitions loaded from inputs.")
+    merged_meta = merge_and_validate_meta(metas)
 
     x_all = np.concatenate(xs, axis=0)
     u_all = np.concatenate(us, axis=0)
@@ -131,6 +138,11 @@ def build_dataset(args: argparse.Namespace) -> None:
         "meta__num_test": np.array([test_n], dtype=np.int32),
         "meta__x_fields": np.array(["x_odom", "y_odom", "psi_odom", "v_body", "wz_body", "dqL", "dqR"], dtype=object),
         "meta__u_fields": np.array(["u_0", "u_1"], dtype=object),
+        "meta__state_convention_version": np.array([str(merged_meta["meta__state_convention_version"].reshape(-1)[0])], dtype=object),
+        "meta__drive_sign": np.array([float(merged_meta["meta__drive_sign"].reshape(-1)[0])], dtype=np.float32),
+        "meta__pose_source": np.array([str(merged_meta["meta__pose_source"].reshape(-1)[0])], dtype=object),
+        "meta__heading_source": np.array([str(merged_meta["meta__heading_source"].reshape(-1)[0])], dtype=object),
+        "meta__control_definition": np.array([str(merged_meta["meta__control_definition"].reshape(-1)[0])], dtype=object),
         "train__x_t": x_train,
         "train__u_t": u_train,
         "train__x_tp1": y_train,

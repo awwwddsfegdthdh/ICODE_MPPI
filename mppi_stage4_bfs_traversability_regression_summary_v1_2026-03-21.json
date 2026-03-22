@@ -1,0 +1,147 @@
+{
+  "date": "2026-03-21",
+  "old_ref": "/tmp/mppi_stage4_phaseB_round_20260321/defaults_after_phaseB_round_v2",
+  "new_ref": "/tmp/mppi_bfs_traversability_regression_20260321",
+  "old": {
+    "n": 5,
+    "reach_rate": 0.6,
+    "collision_rate": 0.0,
+    "stuck_rate": 0.4,
+    "final_dist_mean": 0.747947347164154,
+    "mppi_steps_mean": 675.6,
+    "override_steps_mean": 13.4,
+    "jam_contact_events_mean": 0.0,
+    "progress_stall_events_mean": 0.2,
+    "speed_cap_applied_steps_mean": 444.6,
+    "mppi_reverse_raw_steps_mean": 37.6,
+    "per_seed": [
+      {
+        "seed": 6101,
+        "reached_goal": true,
+        "collision_steps": 0,
+        "final_dist_to_goal": 0.3497409224510193,
+        "mppi_action_steps": 676,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 676
+        }
+      },
+      {
+        "seed": 6102,
+        "reached_goal": false,
+        "collision_steps": 0,
+        "final_dist_to_goal": 1.1611545085906982,
+        "mppi_action_steps": 933,
+        "supervisor_override_steps": 67,
+        "trigger_reason_steps": {
+          "normal": 933,
+          "progress_stall": 1,
+          "recover_sequence": 66
+        }
+      },
+      {
+        "seed": 6103,
+        "reached_goal": false,
+        "collision_steps": 0,
+        "final_dist_to_goal": 1.529309868812561,
+        "mppi_action_steps": 1000,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 1000
+        }
+      },
+      {
+        "seed": 6104,
+        "reached_goal": true,
+        "collision_steps": 0,
+        "final_dist_to_goal": 0.3496988117694855,
+        "mppi_action_steps": 368,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 368
+        }
+      },
+      {
+        "seed": 6105,
+        "reached_goal": true,
+        "collision_steps": 0,
+        "final_dist_to_goal": 0.3498326241970062,
+        "mppi_action_steps": 401,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 401
+        }
+      }
+    ]
+  },
+  "new": {
+    "n": 5,
+    "reach_rate": 0.6,
+    "collision_rate": 0.0,
+    "stuck_rate": 0.4,
+    "final_dist_mean": 0.7480939328670502,
+    "mppi_steps_mean": 698.8,
+    "override_steps_mean": 0.0,
+    "jam_contact_events_mean": 0.0,
+    "progress_stall_events_mean": 0.0,
+    "speed_cap_applied_steps_mean": 499.8,
+    "mppi_reverse_raw_steps_mean": 22.6,
+    "per_seed": [
+      {
+        "seed": 6101,
+        "reached_goal": true,
+        "collision_steps": 0,
+        "final_dist_to_goal": 0.3497409224510193,
+        "mppi_action_steps": 676,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 676
+        }
+      },
+      {
+        "seed": 6102,
+        "reached_goal": false,
+        "collision_steps": 0,
+        "final_dist_to_goal": 1.1616705656051636,
+        "mppi_action_steps": 1000,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 1000
+        }
+      },
+      {
+        "seed": 6103,
+        "reached_goal": false,
+        "collision_steps": 0,
+        "final_dist_to_goal": 1.529309868812561,
+        "mppi_action_steps": 1000,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 1000
+        }
+      },
+      {
+        "seed": 6104,
+        "reached_goal": true,
+        "collision_steps": 0,
+        "final_dist_to_goal": 0.34991568326950073,
+        "mppi_action_steps": 417,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 417
+        }
+      },
+      {
+        "seed": 6105,
+        "reached_goal": true,
+        "collision_steps": 0,
+        "final_dist_to_goal": 0.3498326241970062,
+        "mppi_action_steps": 401,
+        "supervisor_override_steps": 0,
+        "trigger_reason_steps": {
+          "normal": 401
+        }
+      }
+    ]
+  }
+}
