@@ -150,7 +150,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--no-kinematic-lock", action="store_false", dest="kinematic_lock")
     parser.add_argument("--seed", type=int, default=20260313)
 
-    parser.add_argument("--num-samples", type=int, default=900)
+    parser.add_argument("--num-samples", type=int, default=800)
     parser.add_argument("--horizon", type=int, default=60)
     parser.add_argument("--mppi-lambda", type=float, default=1.0)
     parser.add_argument("--noise-sigma", type=float, nargs=2, default=(1.6, 1.6))
@@ -536,11 +536,17 @@ def main() -> None:
         target_xy = base_xy0 + float(args.target_forward_m) * np.array([np.cos(yaw0), np.sin(yaw0)], dtype=np.float32)
         env.set_goal_xy(float(target_xy[0]), float(target_xy[1]))
     obstacles_gt = env.get_obstacles_xyr()
+    scene_seed = int(args.scene_seed) if args.scene_seed >= 0 else int(args.seed + 17)
+    print(
+        f"[repro] seed={int(args.seed)} scene_seed={scene_seed} "
+        f"num_samples={int(args.num_samples)} max_steps={int(args.max_steps)} "
+        f"random_obstacles={bool(args.random_obstacles)} "
+        f"min_line_blockers={int(args.min_line_blockers)} require_mixed_sides={bool(args.require_mixed_sides)}"
+    )
     obstacles_nav = obstacles_gt.copy() if args.oracle_mode else np.zeros((0, 3), dtype=np.float32)
     random_scene_success = True
     scene_sampling_stage = 0
     if args.random_obstacles:
-        scene_seed = int(args.scene_seed) if args.scene_seed >= 0 else int(args.seed + 17)
         rng_scene = np.random.default_rng(scene_seed)
         if args.constrain_obs_radius:
             if args.randomize_obs_radius:
