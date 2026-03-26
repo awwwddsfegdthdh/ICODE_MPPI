@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -112,6 +113,26 @@ def line_of_sight_blocked_confidence(
     Returns:
       blocked, blocked_confidence, observed_cells, sampled_cells
     """
+    geom_conf = 0.0
+    obs_geom = np.asarray(obstacles_xyr, dtype=np.float32)
+    if obs_geom.ndim == 2 and obs_geom.shape[0] > 0:
+        a = np.asarray(start_xy, dtype=np.float32)
+        b = np.asarray(goal_xy, dtype=np.float32)
+        best_clear = float("inf")
+        for i in range(obs_geom.shape[0]):
+            c = obs_geom[i, :2]
+            r_eff = float(obs_geom[i, 2] + float(robot_radius) + float(margin))
+            dist, t = point_segment_distance_and_t(a, b, c)
+            if 0.0 < t < 1.0:
+                clear = float(dist - r_eff)
+                if clear < best_clear:
+                    best_clear = clear
+        if np.isfinite(best_clear):
+            if best_clear <= 0.0:
+                geom_conf = 1.0
+            else:
+                geom_conf = float(np.exp(-best_clear / 0.05))
+
     if occ_grid is not None and occ_min_xy is not None and occ_resolution is not None:
         occ = np.asarray(occ_grid, dtype=bool)
         if occ_observed is None:
@@ -159,21 +180,271 @@ def line_of_sight_blocked_confidence(
                 observed_cells += 1
                 if occ[rr, cc]:
                     occ_cells += 1
-        blocked_conf = float(occ_cells / max(1, observed_cells))
+        occ_conf = float(occ_cells / max(1, observed_cells))
+        blocked_conf = float(max(occ_conf, geom_conf))
         blocked = bool(blocked_conf >= float(blocked_conf_threshold))
         return blocked, blocked_conf, int(observed_cells), int(len(sampled))
 
-    blocked_geom = line_of_sight_blocked(
-        start_xy=start_xy,
-        goal_xy=goal_xy,
+    blocked_geom = bool(geom_conf >= float(blocked_conf_threshold))
+    return blocked_geom, float(geom_conf), 1, 1
+
+
+def blocked_confidence_range_semantics(
+    start_xy: np.ndarray,
+    goal_xy: np.ndarray,
+    heading_xy: Optional[np.ndarray],
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float = 0.12,
+    occ_grid: Optional[np.ndarray] = None,
+    occ_observed: Optional[np.ndarray] = None,
+    occ_min_xy: Optional[np.ndarray] = None,
+    occ_resolution: Optional[float] = None,
+    corridor_len: float = 1.2,
+    corridor_half_width: float = 0.45,
+    front_fov_deg: float = 80.0,
+    front_range: float = 0.9,
+    blocked_conf_threshold: float = 0.65,
+) -> Tuple[bool, float, Dict[str, float]]:
+    """
+    Range semantics for blocked confidence:
+      - goal corridor occupancy/risk
+      - forward sector occupancy/risk
+    """
+    base = np.asarray(start_xy, dtype=np.float32).reshape(2)
+    goal = np.asarray(goal_xy, dtype=np.float32).reshape(2)
+    obs = np.asarray(obstacles_xyr, dtype=np.float32)
+    eps = 1e-6
+    gvec = goal - base
+    gnorm = float(np.linalg.norm(gvec))
+    if gnorm > eps:
+        gdir = gvec / gnorm
+    else:
+        gdir = np.array([1.0, 0.0], dtype=np.float32)
+    gperp = np.array([-gdir[1], gdir[0]], dtype=np.float32)
+
+    if heading_xy is not None:
+        hvec = np.asarray(heading_xy, dtype=np.float32).reshape(2) - base
+        hnorm = float(np.linalg.norm(hvec))
+        if hnorm > eps:
+            hdir = hvec / hnorm
+        else:
+            hdir = gdir.copy()
+    else:
+        hdir = gdir.copy()
+
+    corridor_len_eff = float(max(0.2, corridor_len))
+    corridor_half_width_eff = float(max(0.08, corridor_half_width))
+    front_half_fov = float(np.deg2rad(max(10.0, min(170.0, front_fov_deg)) * 0.5))
+    front_range_eff = float(max(0.2, front_range))
+
+    corridor_geom_conf = 0.0
+    sector_geom_conf = 0.0
+    corridor_min_clear = float("inf")
+    sector_min_clear = float("inf")
+
+    if obs.ndim == 2 and obs.shape[0] > 0:
+        for i in range(obs.shape[0]):
+            c = obs[i, :2]
+            r_eff = float(obs[i, 2] + float(robot_radius) + float(margin))
+            rel = c - base
+            along = float(np.dot(rel, gdir))
+            lat = float(abs(np.dot(rel, gperp)))
+            if 0.0 < along < corridor_len_eff:
+                clear_lat = float(lat - (corridor_half_width_eff + r_eff))
+                if clear_lat < corridor_min_clear:
+                    corridor_min_clear = clear_lat
+
+            dist = float(np.linalg.norm(rel))
+            if dist <= (front_range_eff + r_eff):
+                if dist > eps:
+                    cang = float(np.clip(np.dot(rel / max(dist, eps), hdir), -1.0, 1.0))
+                    ang = float(np.arccos(cang))
+                else:
+                    ang = 0.0
+                if ang <= front_half_fov:
+                    clear_rad = float(dist - r_eff)
+                    if clear_rad < sector_min_clear:
+                        sector_min_clear = clear_rad
+
+        if np.isfinite(corridor_min_clear):
+            if corridor_min_clear <= 0.0:
+                corridor_geom_conf = 1.0
+            else:
+                corridor_geom_conf = float(np.exp(-corridor_min_clear / 0.06))
+        if np.isfinite(sector_min_clear):
+            if sector_min_clear <= 0.0:
+                sector_geom_conf = 1.0
+            else:
+                sector_geom_conf = float(np.exp(-sector_min_clear / 0.08))
+
+    occ_corr_conf = 0.0
+    occ_sector_conf = 0.0
+    occ_corr_obs = 0
+    occ_corr_cnt = 0
+    occ_sector_obs = 0
+    occ_sector_cnt = 0
+    if occ_grid is not None and occ_min_xy is not None and occ_resolution is not None:
+        occ = np.asarray(occ_grid, dtype=bool)
+        if occ_observed is None:
+            observed = np.ones_like(occ, dtype=bool)
+        else:
+            observed = np.asarray(occ_observed, dtype=bool)
+            if observed.shape != occ.shape:
+                observed = np.ones_like(occ, dtype=bool)
+        min_xy = np.asarray(occ_min_xy, dtype=np.float32).reshape(2)
+        res = float(max(1e-6, occ_resolution))
+        h, w = occ.shape
+
+        def _sample_occ(point_xy: np.ndarray) -> Tuple[bool, bool]:
+            cc = int(np.round((float(point_xy[0]) - float(min_xy[0])) / res))
+            rr = int(np.round((float(point_xy[1]) - float(min_xy[1])) / res))
+            if rr < 0 or rr >= h or cc < 0 or cc >= w:
+                return False, False
+            return bool(observed[rr, cc]), bool(occ[rr, cc])
+
+        s_along = float(max(res, 0.08))
+        s_lat = float(max(res, 0.08))
+        n_along = max(2, int(np.ceil(corridor_len_eff / s_along)))
+        n_lat = max(3, int(np.ceil((2.0 * corridor_half_width_eff) / s_lat)))
+        for ia in range(n_along + 1):
+            along = float(ia) / float(max(1, n_along)) * corridor_len_eff
+            for il in range(n_lat + 1):
+                lat = (-corridor_half_width_eff) + float(il) / float(max(1, n_lat)) * (2.0 * corridor_half_width_eff)
+                p = base + along * gdir + lat * gperp
+                seen, occ_hit = _sample_occ(p)
+                if seen:
+                    occ_corr_cnt += 1
+                    if occ_hit:
+                        occ_corr_obs += 1
+
+        s_r = float(max(res, 0.08))
+        n_r = max(2, int(np.ceil(front_range_eff / s_r)))
+        n_ang = max(7, int(np.ceil((2.0 * front_half_fov) / np.deg2rad(6.0))))
+        hperp = np.array([-hdir[1], hdir[0]], dtype=np.float32)
+        for ir in range(1, n_r + 1):
+            rr = float(ir) / float(max(1, n_r)) * front_range_eff
+            for ia in range(n_ang + 1):
+                a = (-front_half_fov) + float(ia) / float(max(1, n_ang)) * (2.0 * front_half_fov)
+                dir_a = float(np.cos(a)) * hdir + float(np.sin(a)) * hperp
+                p = base + rr * dir_a
+                seen, occ_hit = _sample_occ(p)
+                if seen:
+                    occ_sector_cnt += 1
+                    if occ_hit:
+                        occ_sector_obs += 1
+
+        occ_corr_conf = float(occ_corr_obs / max(1, occ_corr_cnt))
+        occ_sector_conf = float(occ_sector_obs / max(1, occ_sector_cnt))
+
+    blocked_conf = float(max(corridor_geom_conf, sector_geom_conf, occ_corr_conf, occ_sector_conf))
+    blocked = bool(blocked_conf >= float(blocked_conf_threshold))
+    info = {
+        "corridor_geom_conf": float(corridor_geom_conf),
+        "sector_geom_conf": float(sector_geom_conf),
+        "occ_corridor_conf": float(occ_corr_conf),
+        "occ_sector_conf": float(occ_sector_conf),
+        "corridor_min_clear": float(corridor_min_clear if np.isfinite(corridor_min_clear) else 1e6),
+        "sector_min_clear": float(sector_min_clear if np.isfinite(sector_min_clear) else 1e6),
+        "occ_corridor_observed": float(occ_corr_cnt),
+        "occ_sector_observed": float(occ_sector_cnt),
+    }
+    return blocked, blocked_conf, info
+
+
+def _point_min_clearance(
+    point_xy: np.ndarray,
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float,
+) -> float:
+    p = np.asarray(point_xy, dtype=np.float32).reshape(2)
+    obs = np.asarray(obstacles_xyr, dtype=np.float32)
+    if obs.size == 0:
+        return float("inf")
+    r_eff = obs[:, 2] + float(robot_radius) + float(margin)
+    d = np.linalg.norm(obs[:, :2] - p[None, :], axis=1) - r_eff
+    return float(np.min(d)) if d.size > 0 else float("inf")
+
+
+def _segment_min_clearance_sampled(
+    start_xy: np.ndarray,
+    goal_xy: np.ndarray,
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float,
+    sample_step_m: float = 0.06,
+) -> float:
+    a = np.asarray(start_xy, dtype=np.float32).reshape(2)
+    b = np.asarray(goal_xy, dtype=np.float32).reshape(2)
+    obs = np.asarray(obstacles_xyr, dtype=np.float32)
+    if obs.size == 0:
+        return float("inf")
+    ab = b - a
+    L = float(np.linalg.norm(ab))
+    if L < 1e-6:
+        return _point_min_clearance(
+            point_xy=a,
+            obstacles_xyr=obs,
+            robot_radius=robot_radius,
+            margin=margin,
+        )
+    step = float(max(0.02, sample_step_m))
+    n = max(3, int(np.ceil(L / step)) + 1)
+    t = np.linspace(0.0, 1.0, num=n, dtype=np.float32)
+    pts = a[None, :] + t[:, None] * ab[None, :]
+    r_eff = obs[:, 2] + float(robot_radius) + float(margin)
+    d = np.linalg.norm(pts[:, None, :] - obs[None, :, :2], axis=2) - r_eff[None, :]
+    return float(np.min(d)) if d.size > 0 else float("inf")
+
+
+def waypoint_is_feasible(
+    base_xy: np.ndarray,
+    waypoint_xy: np.ndarray,
+    goal_xy: np.ndarray,
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float = 0.12,
+    min_seg_clearance: float = 0.01,
+    min_point_clearance: float = 0.0,
+    goal_min_dist: float = 0.20,
+) -> bool:
+    base = np.asarray(base_xy, dtype=np.float32).reshape(2)
+    wp = np.asarray(waypoint_xy, dtype=np.float32).reshape(2)
+    goal = np.asarray(goal_xy, dtype=np.float32).reshape(2)
+    if (not np.all(np.isfinite(base))) or (not np.all(np.isfinite(wp))) or (not np.all(np.isfinite(goal))):
+        return False
+    if float(np.linalg.norm(wp - base)) < 0.05:
+        return False
+    if float(np.linalg.norm(wp - goal)) < float(max(0.0, goal_min_dist)):
+        return False
+    blocked_bw = line_of_sight_blocked(
+        start_xy=base,
+        goal_xy=wp,
         obstacles_xyr=obstacles_xyr,
         robot_radius=robot_radius,
         margin=margin,
-        occ_grid=None,
-        occ_min_xy=None,
-        occ_resolution=None,
     )
-    return bool(blocked_geom), (1.0 if blocked_geom else 0.0), 1, 1
+    if blocked_bw:
+        return False
+    seg_clear = _segment_min_clearance_sampled(
+        start_xy=base,
+        goal_xy=wp,
+        obstacles_xyr=obstacles_xyr,
+        robot_radius=robot_radius,
+        margin=margin,
+    )
+    if seg_clear < float(min_seg_clearance):
+        return False
+    pt_clear = _point_min_clearance(
+        point_xy=wp,
+        obstacles_xyr=obstacles_xyr,
+        robot_radius=robot_radius,
+        margin=margin,
+    )
+    if pt_clear < float(min_point_clearance):
+        return False
+    return True
 
 
 def _clip_target_to_bounds(
@@ -286,6 +557,110 @@ def project_target_with_invariants(
         info["bound_projected"] = 1.0
 
     return t.astype(np.float32), info
+
+
+def project_target_to_passable_point(
+    candidate_xy: np.ndarray,
+    base_xy: np.ndarray,
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float = 0.06,
+    min_seg_clearance: float = 0.06,
+    path_xy: Optional[np.ndarray] = None,
+    min_progress: float = 0.16,
+    backtrack_points: int = 14,
+    ray_samples: int = 8,
+) -> Tuple[np.ndarray, Dict[str, float]]:
+    """
+    Guard active target passability from current base pose.
+
+    If base->candidate is not passable (LOS blocked or sampled clearance too low),
+    project target to a passable point by:
+      1) backtracking on reference path (preferred),
+      2) fallback to ray shrink from base to candidate.
+    """
+    cand = np.asarray(candidate_xy, dtype=np.float32).reshape(2)
+    base = np.asarray(base_xy, dtype=np.float32).reshape(2)
+    obs = np.asarray(obstacles_xyr, dtype=np.float32)
+    info: Dict[str, float] = {
+        "passability_projected": 0.0,
+        "passability_clear_before": 0.0,
+        "passability_clear_after": 0.0,
+    }
+
+    margin_eff = float(max(0.0, margin))
+    clear_req = float(max(0.0, min_seg_clearance))
+    min_prog = float(max(0.0, min_progress))
+
+    def seg_blocked_and_clear(pt: np.ndarray) -> Tuple[bool, float]:
+        blocked = line_of_sight_blocked(
+            start_xy=base,
+            goal_xy=pt,
+            obstacles_xyr=obs,
+            robot_radius=robot_radius,
+            margin=margin_eff,
+        )
+        clear = _segment_min_clearance_sampled(
+            start_xy=base,
+            goal_xy=pt,
+            obstacles_xyr=obs,
+            robot_radius=robot_radius,
+            margin=margin_eff,
+        )
+        return bool(blocked), float(clear)
+
+    blocked_before, clear_before = seg_blocked_and_clear(cand)
+    info["passability_clear_before"] = float(clear_before)
+    info["passability_clear_after"] = float(clear_before)
+
+    if (not blocked_before) and clear_before >= clear_req:
+        return cand.astype(np.float32), info
+
+    best: Optional[np.ndarray] = None
+    best_clear = float(clear_before)
+
+    pth = None if path_xy is None else np.asarray(path_xy, dtype=np.float32)
+    if pth is not None and pth.ndim == 2 and pth.shape[0] >= 2:
+        d_base = np.linalg.norm(pth - base[None, :], axis=1)
+        d_cand = np.linalg.norm(pth - cand[None, :], axis=1)
+        idx_base = int(np.argmin(d_base))
+        idx_cand = int(np.argmin(d_cand))
+        hi = max(idx_base, idx_cand)
+        lo = min(idx_base, idx_cand)
+        if backtrack_points > 0:
+            lo = max(lo, hi - int(max(1, backtrack_points)))
+        for idx in range(int(hi), int(lo) - 1, -1):
+            pt = np.asarray(pth[idx], dtype=np.float32).reshape(2)
+            if float(np.linalg.norm(pt - base)) < min_prog:
+                continue
+            blocked, clear = seg_blocked_and_clear(pt)
+            if (not blocked) and clear >= clear_req:
+                best = pt
+                best_clear = float(clear)
+                break
+
+    if best is None:
+        vec = cand - base
+        dist = float(np.linalg.norm(vec))
+        if dist > 1e-6:
+            alpha_min = float(np.clip(min_prog / max(dist, 1e-9), 0.0, 1.0))
+            ns = int(max(2, ray_samples))
+            for a in np.linspace(1.0, alpha_min, num=ns, dtype=np.float32):
+                pt = base + float(a) * vec
+                if float(np.linalg.norm(pt - base)) < min_prog:
+                    continue
+                blocked, clear = seg_blocked_and_clear(pt)
+                if (not blocked) and clear >= clear_req:
+                    best = np.asarray(pt, dtype=np.float32)
+                    best_clear = float(clear)
+                    break
+
+    if best is not None and float(np.linalg.norm(best - cand)) > 1e-6:
+        info["passability_projected"] = 1.0
+        info["passability_clear_after"] = float(best_clear)
+        return np.asarray(best, dtype=np.float32), info
+
+    return cand.astype(np.float32), info
 
 
 def compute_boundary_recover_target(
@@ -555,12 +930,77 @@ def _inflate_occ_grid(occ: np.ndarray, inflate_cells: int) -> np.ndarray:
     return out
 
 
+def _clearance_map_from_occ(occ: np.ndarray, res: float) -> np.ndarray:
+    """
+    Approximate Euclidean clearance map (meters) from binary occupancy.
+    Occupied cells have clearance 0.
+    """
+    occ_b = np.asarray(occ, dtype=bool)
+    if occ_b.ndim != 2:
+        return np.zeros((0, 0), dtype=np.float32)
+    h, w = occ_b.shape
+    if h <= 0 or w <= 0:
+        return np.zeros((0, 0), dtype=np.float32)
+
+    inf = np.float32(1.0e6)
+    d = np.full((h, w), inf, dtype=np.float32)
+    d[occ_b] = 0.0
+    rt2 = np.float32(np.sqrt(2.0))
+
+    # Forward pass
+    for r in range(h):
+        for c in range(w):
+            if d[r, c] <= 0.0:
+                continue
+            best = float(d[r, c])
+            if r > 0:
+                best = min(best, float(d[r - 1, c]) + 1.0)
+                if c > 0:
+                    best = min(best, float(d[r - 1, c - 1]) + float(rt2))
+                if c + 1 < w:
+                    best = min(best, float(d[r - 1, c + 1]) + float(rt2))
+            if c > 0:
+                best = min(best, float(d[r, c - 1]) + 1.0)
+            d[r, c] = np.float32(best)
+
+    # Backward pass
+    for r in range(h - 1, -1, -1):
+        for c in range(w - 1, -1, -1):
+            if d[r, c] <= 0.0:
+                continue
+            best = float(d[r, c])
+            if r + 1 < h:
+                best = min(best, float(d[r + 1, c]) + 1.0)
+                if c > 0:
+                    best = min(best, float(d[r + 1, c - 1]) + float(rt2))
+                if c + 1 < w:
+                    best = min(best, float(d[r + 1, c + 1]) + float(rt2))
+            if c + 1 < w:
+                best = min(best, float(d[r, c + 1]) + 1.0)
+            d[r, c] = np.float32(best)
+
+    return (d * float(max(1e-6, res))).astype(np.float32)
+
+
 def _bfs_path_cells(
     occ: np.ndarray,
     start_rc: Tuple[int, int],
     goal_rc: Tuple[int, int],
+    clearance_map: Optional[np.ndarray] = None,
+    min_clearance: float = 0.0,
 ) -> Optional[List[Tuple[int, int]]]:
-    if occ[start_rc] or occ[goal_rc]:
+    clear = None if clearance_map is None else np.asarray(clearance_map, dtype=np.float32)
+    clear_floor = float(max(0.0, min_clearance))
+
+    def _cell_ok(rr: int, cc: int) -> bool:
+        if occ[rr, cc]:
+            return False
+        if clear is not None and clear_floor > 0.0:
+            if float(clear[rr, cc]) < clear_floor:
+                return False
+        return True
+
+    if (not _cell_ok(start_rc[0], start_rc[1])) or (not _cell_ok(goal_rc[0], goal_rc[1])):
         return None
     if start_rc == goal_rc:
         return [start_rc]
@@ -581,11 +1021,17 @@ def _bfs_path_cells(
             cc = c + dc
             if rr < 0 or rr >= h or cc < 0 or cc >= w:
                 continue
-            if visited[rr, cc] or occ[rr, cc]:
+            if visited[rr, cc] or (not _cell_ok(rr, cc)):
                 continue
             # For diagonal expansion, forbid corner-cutting through obstacle corners.
             if dr != 0 and dc != 0:
-                if occ[r, cc] or occ[rr, c]:
+                if (not _cell_ok(r, cc)) or (not _cell_ok(rr, c)):
+                    continue
+            if clear is not None and clear_floor > 0.0:
+                edge_clear = float(min(float(clear[r, c]), float(clear[rr, cc])))
+                if dr != 0 and dc != 0:
+                    edge_clear = min(edge_clear, float(clear[r, cc]), float(clear[rr, c]))
+                if edge_clear < clear_floor:
                     continue
             visited[rr, cc] = 1
             parent_r[rr, cc] = r
@@ -616,6 +1062,333 @@ def _bfs_path_cells(
     return path
 
 
+def _astar_path_cells(
+    occ: np.ndarray,
+    start_rc: Tuple[int, int],
+    goal_rc: Tuple[int, int],
+    clearance_map: Optional[np.ndarray] = None,
+    min_clearance: float = 0.0,
+    clearance_soft: float = 0.0,
+    clearance_cost_weight: float = 0.0,
+) -> Optional[List[Tuple[int, int]]]:
+    clear = None if clearance_map is None else np.asarray(clearance_map, dtype=np.float32)
+    clear_floor = float(max(0.0, min_clearance))
+    clear_soft_eff = float(max(clear_floor + 1e-3, clearance_soft))
+    clear_cost_w = float(max(0.0, clearance_cost_weight))
+
+    def _cell_ok(rr: int, cc: int) -> bool:
+        if occ[rr, cc]:
+            return False
+        if clear is not None and clear_floor > 0.0:
+            if float(clear[rr, cc]) < clear_floor:
+                return False
+        return True
+
+    if (not _cell_ok(start_rc[0], start_rc[1])) or (not _cell_ok(goal_rc[0], goal_rc[1])):
+        return None
+    if start_rc == goal_rc:
+        return [start_rc]
+
+    h, w = occ.shape
+    g = np.full((h, w), np.inf, dtype=np.float32)
+    closed = np.zeros((h, w), dtype=np.uint8)
+    parent_r = -np.ones((h, w), dtype=np.int32)
+    parent_c = -np.ones((h, w), dtype=np.int32)
+    nbrs = (
+        (1, 0, 1.0),
+        (-1, 0, 1.0),
+        (0, 1, 1.0),
+        (0, -1, 1.0),
+        (1, 1, np.sqrt(2.0)),
+        (1, -1, np.sqrt(2.0)),
+        (-1, 1, np.sqrt(2.0)),
+        (-1, -1, np.sqrt(2.0)),
+    )
+
+    sr, sc = int(start_rc[0]), int(start_rc[1])
+    gr, gc = int(goal_rc[0]), int(goal_rc[1])
+    g[sr, sc] = 0.0
+
+    def _heur(rr: int, cc: int) -> float:
+        return float(np.hypot(float(rr - gr), float(cc - gc)))
+
+    open_heap: list[tuple[float, float, int, int]] = []
+    heapq.heappush(open_heap, (_heur(sr, sc), 0.0, sr, sc))
+
+    found = False
+    while open_heap:
+        f_cur, g_cur, r, c = heapq.heappop(open_heap)
+        if closed[r, c]:
+            continue
+        if g_cur > float(g[r, c]) + 1e-9:
+            continue
+        closed[r, c] = 1
+        if (r, c) == (gr, gc):
+            found = True
+            break
+
+        for dr, dc, move_cost in nbrs:
+            rr = r + dr
+            cc = c + dc
+            if rr < 0 or rr >= h or cc < 0 or cc >= w:
+                continue
+            if closed[rr, cc] or (not _cell_ok(rr, cc)):
+                continue
+            # For diagonal expansion, forbid corner-cutting through obstacle corners.
+            if dr != 0 and dc != 0:
+                if (not _cell_ok(r, cc)) or (not _cell_ok(rr, c)):
+                    continue
+            edge_clear = float("inf")
+            if clear is not None:
+                edge_clear = float(min(float(clear[r, c]), float(clear[rr, cc])))
+                if dr != 0 and dc != 0:
+                    edge_clear = min(edge_clear, float(clear[r, cc]), float(clear[rr, c]))
+                if clear_floor > 0.0 and edge_clear < clear_floor:
+                    continue
+            clear_pen = 0.0
+            if clear is not None and clear_cost_w > 0.0:
+                short = float(np.clip((clear_soft_eff - edge_clear) / max(clear_soft_eff - clear_floor, 1e-6), 0.0, 1.0))
+                clear_pen = clear_cost_w * short * short
+            cand = float(g_cur + move_cost + clear_pen)
+            if cand + 1e-9 < float(g[rr, cc]):
+                g[rr, cc] = cand
+                parent_r[rr, cc] = r
+                parent_c[rr, cc] = c
+                heapq.heappush(open_heap, (cand + _heur(rr, cc), cand, rr, cc))
+
+    if not found:
+        return None
+
+    path: List[Tuple[int, int]] = []
+    cur = (gr, gc)
+    while True:
+        path.append(cur)
+        if cur == (sr, sc):
+            break
+        pr = int(parent_r[cur])
+        pc = int(parent_c[cur])
+        if pr < 0 or pc < 0:
+            return None
+        cur = (pr, pc)
+    path.reverse()
+    return path
+
+
+def _hybrid_astar_path_xy(
+    occ: np.ndarray,
+    min_xy: np.ndarray,
+    res: float,
+    start_xy: np.ndarray,
+    goal_xy: np.ndarray,
+    start_yaw: Optional[float] = None,
+    n_theta: int = 48,
+    step_cells: float = 2.5,
+    turn_penalty: float = 0.20,
+    max_expansions: int = 20_000,
+) -> Optional[np.ndarray]:
+    """
+    Lightweight heading-aware planner on 2D occupancy grid.
+    It enforces forward motion primitives and heading continuity so the
+    generated path is more driveable than pure 2D A*/BFS centerline paths.
+    """
+    occ_b = np.asarray(occ, dtype=bool)
+    if occ_b.ndim != 2 or occ_b.shape[0] <= 1 or occ_b.shape[1] <= 1:
+        return None
+    h, w = occ_b.shape
+    mn = np.asarray(min_xy, dtype=np.float32).reshape(2)
+    rr = float(max(1e-6, res))
+    start = np.asarray(start_xy, dtype=np.float32).reshape(2)
+    goal = np.asarray(goal_xy, dtype=np.float32).reshape(2)
+    if not (np.all(np.isfinite(start)) and np.all(np.isfinite(goal))):
+        return None
+
+    def _to_rc(pt_xy: np.ndarray) -> Tuple[int, int]:
+        c = int(np.clip(np.round((pt_xy[0] - mn[0]) / rr), 0, w - 1))
+        r = int(np.clip(np.round((pt_xy[1] - mn[1]) / rr), 0, h - 1))
+        return r, c
+
+    def _to_xy(r0: int, c0: int) -> np.ndarray:
+        return np.array([mn[0] + c0 * rr, mn[1] + r0 * rr], dtype=np.float32)
+
+    def _wrap_pi(a: float) -> float:
+        return float((a + np.pi) % (2.0 * np.pi) - np.pi)
+
+    theta_bins = int(max(12, n_theta))
+    dtheta = float(2.0 * np.pi / theta_bins)
+
+    def _to_tidx(yaw: float) -> int:
+        a = float((yaw + np.pi) % (2.0 * np.pi))
+        tid = int(np.floor(a / dtheta)) % theta_bins
+        return tid
+
+    def _tidx_to_yaw(tid: int) -> float:
+        return float(-np.pi + (float(tid) + 0.5) * dtheta)
+
+    start_rc = _to_rc(start)
+    goal_rc = _to_rc(goal)
+    if occ_b[start_rc] or occ_b[goal_rc]:
+        return None
+
+    if start_yaw is None or (not np.isfinite(float(start_yaw))):
+        dsg = goal - start
+        if float(np.linalg.norm(dsg)) > 1e-6:
+            yaw0 = float(np.arctan2(dsg[1], dsg[0]))
+        else:
+            yaw0 = 0.0
+    else:
+        yaw0 = float(start_yaw)
+    start_tid = _to_tidx(yaw0)
+
+    # Primitive length and heading increments.
+    step_len = float(max(1.2 * rr, float(step_cells) * rr))
+    turn_step = max(1, int(round(theta_bins / 36)))  # ~10deg for 72 bins
+    motion_prims = (-turn_step, 0, turn_step)
+
+    def _cell_free(r0: int, c0: int) -> bool:
+        return (0 <= r0 < h) and (0 <= c0 < w) and (not occ_b[r0, c0])
+
+    def _segment_clear(p0: np.ndarray, p1: np.ndarray) -> bool:
+        d = p1 - p0
+        L = float(np.linalg.norm(d))
+        if L < 1e-9:
+            r0, c0 = _to_rc(p0)
+            return _cell_free(r0, c0)
+        n = max(2, int(np.ceil(L / max(0.5 * rr, 1e-3))))
+        for i in range(n + 1):
+            t = float(i) / float(n)
+            p = p0 + t * d
+            r0, c0 = _to_rc(p)
+            if not _cell_free(r0, c0):
+                return False
+        return True
+
+    start_key = (int(start_rc[0]), int(start_rc[1]), int(start_tid))
+    goal_xy_np = goal.astype(np.float32)
+
+    g_cost: Dict[Tuple[int, int, int], float] = {start_key: 0.0}
+    parent: Dict[Tuple[int, int, int], Tuple[int, int, int]] = {}
+    parent_xy: Dict[Tuple[int, int, int], np.ndarray] = {start_key: start.astype(np.float32)}
+    open_heap: List[Tuple[float, float, Tuple[int, int, int]]] = []
+
+    def _heur(p_xy: np.ndarray) -> float:
+        return float(np.linalg.norm(p_xy - goal_xy_np))
+
+    heapq.heappush(open_heap, (_heur(start), 0.0, start_key))
+    visited = set()
+    best_goal_key: Optional[Tuple[int, int, int]] = None
+    best_goal_dist = float("inf")
+    expansions = 0
+    goal_gate = float(max(1.5 * rr, 0.12))
+
+    while open_heap and expansions < int(max_expansions):
+        f_cur, g_cur, key = heapq.heappop(open_heap)
+        if key in visited:
+            continue
+        visited.add(key)
+        expansions += 1
+
+        kr, kc, kt = key
+        p0 = parent_xy.get(key, _to_xy(kr, kc))
+        yaw = _tidx_to_yaw(kt)
+        d_goal = float(np.linalg.norm(p0 - goal_xy_np))
+        if d_goal < best_goal_dist:
+            best_goal_dist = d_goal
+            best_goal_key = key
+        if d_goal <= goal_gate:
+            best_goal_key = key
+            break
+
+        for dtid in motion_prims:
+            nt = int((kt + dtid) % theta_bins)
+            yaw_n = _tidx_to_yaw(nt)
+            p1 = p0 + step_len * np.array([np.cos(yaw_n), np.sin(yaw_n)], dtype=np.float32)
+            nr, nc = _to_rc(p1)
+            nkey = (int(nr), int(nc), int(nt))
+            if not _cell_free(nr, nc):
+                continue
+            if not _segment_clear(p0, p1):
+                continue
+            move_cost = float(step_len + float(turn_penalty) * abs(float(dtid)) / max(1.0, float(turn_step)))
+            cand_g = float(g_cur + move_cost)
+            old_g = g_cost.get(nkey, float("inf"))
+            if cand_g + 1e-9 < old_g:
+                g_cost[nkey] = cand_g
+                parent[nkey] = key
+                parent_xy[nkey] = p1.astype(np.float32)
+                h_n = _heur(p1)
+                heapq.heappush(open_heap, (cand_g + h_n, cand_g, nkey))
+
+    if best_goal_key is None:
+        return None
+
+    # Reconstruct continuous path from parent_xy.
+    chain: List[np.ndarray] = []
+    cur = best_goal_key
+    while True:
+        p = parent_xy.get(cur)
+        if p is None:
+            p = _to_xy(int(cur[0]), int(cur[1]))
+        chain.append(np.asarray(p, dtype=np.float32))
+        if cur == start_key:
+            break
+        if cur not in parent:
+            return None
+        cur = parent[cur]
+    chain.reverse()
+    if len(chain) <= 0:
+        return None
+    path = np.stack(chain, axis=0).astype(np.float32)
+    path[0] = start.astype(np.float32)
+    path[-1] = goal.astype(np.float32)
+    return path
+
+
+def path_min_clearance_sampled(
+    path_xy: np.ndarray,
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float = 0.0,
+    sample_step_m: float = 0.05,
+) -> float:
+    pth = np.asarray(path_xy, dtype=np.float32)
+    if pth.ndim != 2 or pth.shape[0] <= 0:
+        return float("-inf")
+    obs = np.asarray(obstacles_xyr, dtype=np.float32)
+    if obs.size == 0:
+        return float("inf")
+    min_clear = float("inf")
+    for i in range(max(0, int(pth.shape[0] - 1))):
+        c = _segment_min_clearance_sampled(
+            start_xy=pth[i],
+            goal_xy=pth[i + 1],
+            obstacles_xyr=obs,
+            robot_radius=robot_radius,
+            margin=margin,
+            sample_step_m=sample_step_m,
+        )
+        if c < min_clear:
+            min_clear = float(c)
+    return float(min_clear)
+
+
+def path_is_passable_sampled(
+    path_xy: np.ndarray,
+    obstacles_xyr: np.ndarray,
+    robot_radius: float,
+    margin: float = 0.0,
+    min_seg_clearance: float = 0.01,
+    sample_step_m: float = 0.05,
+) -> bool:
+    min_clear = path_min_clearance_sampled(
+        path_xy=path_xy,
+        obstacles_xyr=obstacles_xyr,
+        robot_radius=robot_radius,
+        margin=margin,
+        sample_step_m=sample_step_m,
+    )
+    return bool(np.isfinite(min_clear) and (float(min_clear) >= float(min_seg_clearance)))
+
+
 def plan_global_path_xy(
     start_xy: np.ndarray,
     goal_xy: np.ndarray,
@@ -628,10 +1401,29 @@ def plan_global_path_xy(
     occ_grid: Optional[np.ndarray] = None,
     occ_min_xy: Optional[np.ndarray] = None,
     occ_resolution: Optional[float] = None,
+    planner: str = "astar",
+    start_yaw: Optional[float] = None,
+    passability_check: bool = True,
+    passability_margin: float = 0.0,
+    passability_min_clearance: float = 0.01,
+    hybrid_n_theta: int = 48,
+    hybrid_step_cells: float = 2.5,
+    hybrid_turn_penalty: float = 0.20,
+    hybrid_max_expansions: int = 20_000,
+    debug_info: Optional[Dict[str, object]] = None,
 ) -> Optional[np.ndarray]:
+    if debug_info is not None:
+        debug_info.clear()
+        debug_info["fail_cause"] = "none"
+
     start = np.asarray(start_xy, dtype=np.float32)
     goal = np.asarray(goal_xy, dtype=np.float32)
     obs = np.asarray(obstacles_xyr, dtype=np.float32)
+    # Unified traversability semantics:
+    # - planner occupancy inflation and post-passability check share the same
+    #   margin floor to avoid "search passable but post-check reject" divergence.
+    clearance_margin = float(max(0.0, float(inflation_margin), float(passability_margin)))
+    clearance_floor = float(max(0.0, float(passability_min_clearance)))
 
     if occ_grid is not None and occ_min_xy is not None and occ_resolution is not None:
         occ_raw = np.asarray(occ_grid, dtype=bool)
@@ -639,11 +1431,14 @@ def plan_global_path_xy(
         res = float(max(1e-6, occ_resolution))
         inflate_cells = int(
             np.ceil(
-                max(0.0, float(robot_radius) + float(inflation_margin))
+                max(0.0, float(robot_radius) + float(clearance_margin))
                 / max(res, 1e-6)
             )
         )
         occ = _inflate_occ_grid(occ=occ_raw, inflate_cells=inflate_cells)
+        clear_map = _clearance_map_from_occ(occ=occ, res=res)
+        clear_soft = float(clearance_floor + max(2.0 * res, 0.08))
+        clear_weight = 0.35
         ny, nx = occ.shape
         start_rc = _grid_to_rc(start, min_xy=min_xy, res=res, nx=nx, ny=ny)
         goal_rc = _grid_to_rc(goal, min_xy=min_xy, res=res, nx=nx, ny=ny)
@@ -659,15 +1454,100 @@ def plan_global_path_xy(
                             continue
                         if (dr * dr + dc * dc) <= (carve_r * carve_r):
                             occ[rr, cc] = False
-        rc_path = _bfs_path_cells(occ=occ, start_rc=start_rc, goal_rc=goal_rc)
-        if rc_path is None or len(rc_path) == 0:
-            return None
-        xy_path = np.stack([_grid_to_xy(r=r, c=c, min_xy=min_xy, res=res) for r, c in rc_path], axis=0).astype(np.float32)
+        planner_mode = str(planner).strip().lower()
+        if planner_mode == "bfs":
+            rc_path = _bfs_path_cells(
+                occ=occ,
+                start_rc=start_rc,
+                goal_rc=goal_rc,
+                clearance_map=clear_map,
+                min_clearance=clearance_floor,
+            )
+            xy_path = None
+        elif planner_mode in ("hybrid_astar", "hybrid", "se2"):
+            xy_path = _hybrid_astar_path_xy(
+                occ=occ,
+                min_xy=min_xy,
+                res=res,
+                start_xy=start,
+                goal_xy=goal,
+                start_yaw=start_yaw,
+                n_theta=int(hybrid_n_theta),
+                step_cells=float(hybrid_step_cells),
+                turn_penalty=float(hybrid_turn_penalty),
+                max_expansions=int(hybrid_max_expansions),
+            )
+            # Robust fallback: keep global-guide alive when heading-aware search
+            # cannot produce a path in tight maps.
+            if xy_path is None:
+                rc_path = _astar_path_cells(
+                    occ=occ,
+                    start_rc=start_rc,
+                    goal_rc=goal_rc,
+                    clearance_map=clear_map,
+                    min_clearance=clearance_floor,
+                    clearance_soft=clear_soft,
+                    clearance_cost_weight=clear_weight,
+                )
+                if rc_path is None:
+                    rc_path = _bfs_path_cells(
+                        occ=occ,
+                        start_rc=start_rc,
+                        goal_rc=goal_rc,
+                        clearance_map=clear_map,
+                        min_clearance=clearance_floor,
+                    )
+                if rc_path is not None and len(rc_path) > 0:
+                    xy_path = np.stack(
+                        [_grid_to_xy(r=r, c=c, min_xy=min_xy, res=res) for r, c in rc_path],
+                        axis=0,
+                    ).astype(np.float32)
+            rc_path = None
+        else:
+            rc_path = _astar_path_cells(
+                occ=occ,
+                start_rc=start_rc,
+                goal_rc=goal_rc,
+                clearance_map=clear_map,
+                min_clearance=clearance_floor,
+                clearance_soft=clear_soft,
+                clearance_cost_weight=clear_weight,
+            )
+            if rc_path is None:
+                rc_path = _bfs_path_cells(
+                    occ=occ,
+                    start_rc=start_rc,
+                    goal_rc=goal_rc,
+                    clearance_map=clear_map,
+                    min_clearance=clearance_floor,
+                )
+            xy_path = None
+        if xy_path is None:
+            if rc_path is None or len(rc_path) == 0:
+                if debug_info is not None:
+                    debug_info["fail_cause"] = "search_fail"
+                return None
+            xy_path = np.stack([_grid_to_xy(r=r, c=c, min_xy=min_xy, res=res) for r, c in rc_path], axis=0).astype(np.float32)
         xy_path[0] = start
         xy_path[-1] = goal
+        if passability_check and obstacles_xyr is not None and np.asarray(obstacles_xyr).size > 0:
+            if not path_is_passable_sampled(
+                path_xy=xy_path,
+                obstacles_xyr=obstacles_xyr,
+                robot_radius=float(robot_radius),
+                margin=float(clearance_margin),
+                min_seg_clearance=float(clearance_floor),
+            ):
+                if debug_info is not None:
+                    debug_info["fail_cause"] = "passability_reject"
+                return None
+        if debug_info is not None:
+            debug_info["fail_cause"] = "none"
         return xy_path
 
     if obs.size == 0:
+        if debug_info is not None:
+            debug_info["fail_cause"] = "none"
         return np.stack([start, goal], axis=0).astype(np.float32)
 
     occ, min_xy, res, nx, ny = _build_occ_grid(
@@ -675,12 +1555,14 @@ def plan_global_path_xy(
         goal_xy=goal,
         obstacles_xyr=obs,
         robot_radius=robot_radius,
-        inflation_margin=inflation_margin,
+        inflation_margin=clearance_margin,
         grid_resolution=grid_resolution,
         grid_padding=grid_padding,
         max_grid_cells=max_grid_cells,
     )
     if occ is None or min_xy is None:
+        if debug_info is not None:
+            debug_info["fail_cause"] = "grid_build_fail"
         return None
 
     start_rc = _grid_to_rc(start, min_xy=min_xy, res=res, nx=nx, ny=ny)
@@ -699,13 +1581,97 @@ def plan_global_path_xy(
                         continue
                     if (dr * dr + dc * dc) <= (carve_r * carve_r):
                         occ[rr, cc] = False
-    rc_path = _bfs_path_cells(occ=occ, start_rc=start_rc, goal_rc=goal_rc)
-    if rc_path is None or len(rc_path) == 0:
-        return None
+    clear_map = _clearance_map_from_occ(occ=occ, res=res)
+    clear_soft = float(clearance_floor + max(2.0 * res, 0.08))
+    clear_weight = 0.35
+    planner_mode = str(planner).strip().lower()
+    if planner_mode == "bfs":
+        rc_path = _bfs_path_cells(
+            occ=occ,
+            start_rc=start_rc,
+            goal_rc=goal_rc,
+            clearance_map=clear_map,
+            min_clearance=clearance_floor,
+        )
+        xy_path = None
+    elif planner_mode in ("hybrid_astar", "hybrid", "se2"):
+        xy_path = _hybrid_astar_path_xy(
+            occ=occ,
+            min_xy=min_xy,
+            res=res,
+            start_xy=start,
+            goal_xy=goal,
+            start_yaw=start_yaw,
+            n_theta=int(hybrid_n_theta),
+            step_cells=float(hybrid_step_cells),
+            turn_penalty=float(hybrid_turn_penalty),
+            max_expansions=int(hybrid_max_expansions),
+        )
+        if xy_path is None:
+            rc_path = _astar_path_cells(
+                occ=occ,
+                start_rc=start_rc,
+                goal_rc=goal_rc,
+                clearance_map=clear_map,
+                min_clearance=clearance_floor,
+                clearance_soft=clear_soft,
+                clearance_cost_weight=clear_weight,
+            )
+            if rc_path is None:
+                rc_path = _bfs_path_cells(
+                    occ=occ,
+                    start_rc=start_rc,
+                    goal_rc=goal_rc,
+                    clearance_map=clear_map,
+                    min_clearance=clearance_floor,
+                )
+            if rc_path is not None and len(rc_path) > 0:
+                xy_path = np.stack(
+                    [_grid_to_xy(r=r, c=c, min_xy=min_xy, res=res) for r, c in rc_path],
+                    axis=0,
+                ).astype(np.float32)
+        rc_path = None
+    else:
+        rc_path = _astar_path_cells(
+            occ=occ,
+            start_rc=start_rc,
+            goal_rc=goal_rc,
+            clearance_map=clear_map,
+            min_clearance=clearance_floor,
+            clearance_soft=clear_soft,
+            clearance_cost_weight=clear_weight,
+        )
+        if rc_path is None:
+            rc_path = _bfs_path_cells(
+                occ=occ,
+                start_rc=start_rc,
+                goal_rc=goal_rc,
+                clearance_map=clear_map,
+                min_clearance=clearance_floor,
+            )
+        xy_path = None
+    if xy_path is None:
+        if rc_path is None or len(rc_path) == 0:
+            if debug_info is not None:
+                debug_info["fail_cause"] = "search_fail"
+            return None
 
-    xy_path = np.stack([_grid_to_xy(r=r, c=c, min_xy=min_xy, res=res) for r, c in rc_path], axis=0).astype(np.float32)
+        xy_path = np.stack([_grid_to_xy(r=r, c=c, min_xy=min_xy, res=res) for r, c in rc_path], axis=0).astype(np.float32)
     xy_path[0] = start
     xy_path[-1] = goal
+    if passability_check and obs.size > 0:
+        if not path_is_passable_sampled(
+            path_xy=xy_path,
+            obstacles_xyr=obs,
+            robot_radius=float(robot_radius),
+            margin=float(clearance_margin),
+            min_seg_clearance=float(clearance_floor),
+        ):
+            if debug_info is not None:
+                debug_info["fail_cause"] = "passability_reject"
+            return None
+    if debug_info is not None:
+        debug_info["fail_cause"] = "none"
     return xy_path
 
 
@@ -1053,6 +2019,7 @@ def compute_auto_waypoint_with_side(
     waypoint_max_lateral: Optional[float] = None,
     waypoint_min_forward: float = 0.0,
     waypoint_max_forward: Optional[float] = None,
+    waypoint_goal_min_dist: float = 0.20,
 ) -> Tuple[Optional[np.ndarray], int]:
     """
     Returns (waypoint_xy, side), where side in {-1, 0, +1}.
@@ -1080,11 +2047,6 @@ def compute_auto_waypoint_with_side(
         return None, 0
 
     blockers.sort(key=lambda x: x[0])
-    _, bi, r_eff = blockers[0]
-    c = obs[bi, :2]
-    offset = r_eff + max(0.0, float(lateral_extra))
-    along_back = -0.08 * L
-    along_fwd = 0.04 * L
 
     preferred = 0
     if preferred_side > 0:
@@ -1093,52 +2055,114 @@ def compute_auto_waypoint_with_side(
         preferred = -1
 
     side_order = [1, -1] if preferred == 0 else [preferred, -preferred]
-    best = None
-    best_side = 0
-    best_score = 1e18
-    for side in side_order:
-        for fwd in (along_back, along_fwd):
-            lat_scale = 1.0 if fwd == along_back else 1.20
-            w = c + float(side) * p * (offset * lat_scale) + d * fwd
-            t_line, lat_line = line_signed_lateral(start_xy=a, goal_xy=b, point_xy=w)
-            fwd_m = float(t_line) * L
-            if waypoint_max_lateral is not None and abs(float(lat_line)) > float(max(0.0, waypoint_max_lateral)):
-                continue
-            if fwd_m < float(max(0.0, waypoint_min_forward)):
-                continue
-            if waypoint_max_forward is not None and fwd_m > float(max(0.0, waypoint_max_forward)):
-                continue
-            path_len = float(np.linalg.norm(a - w) + np.linalg.norm(w - b))
-            clr_pen = 0.0
-            for j in range(obs.shape[0]):
-                rr = float(obs[j, 2] + robot_radius + margin)
-                dj = float(np.linalg.norm(w - obs[j, :2]))
-                if dj < rr:
-                    clr_pen += (rr - dj) ** 2
+    blocker_count = min(3, len(blockers))
+    blocker_ids = [int(blockers[k][1]) for k in range(blocker_count)]
+    blocker_refs = [float(blockers[k][2]) for k in range(blocker_count)]
 
-            blocked_a_w = line_of_sight_blocked(
-                start_xy=a,
-                goal_xy=w,
-                obstacles_xyr=obs,
-                robot_radius=robot_radius,
-                margin=margin,
-            )
-            blocked_w_b = line_of_sight_blocked(
-                start_xy=w,
-                goal_xy=b,
-                obstacles_xyr=obs,
-                robot_radius=robot_radius,
-                margin=margin,
-            )
-            los_pen = (2.0 if blocked_a_w else 0.0) + (4.0 if blocked_w_b else 0.0)
+    forward_offsets = np.asarray([-0.14, -0.08, -0.02, 0.05, 0.12], dtype=np.float32) * float(L)
+    lateral_scales = (1.00, 1.25, 1.55, 1.85)
+    clearance_req = float(max(0.02, 0.10 * float(robot_radius)))
 
-            # Strongly prefer requested side, unless it is clearly invalid.
-            pref_pen = 0.0 if (preferred == 0 or side == preferred) else 0.25
-            score = path_len + 30.0 * clr_pen + 8.0 * los_pen + pref_pen
-            if score < best_score:
-                best_score = score
-                best = w
-                best_side = int(side)
-    if best is None:
+    candidates: List[Tuple[float, int, np.ndarray, float, bool, bool, float, float, float]] = []
+    for bi, r_eff in zip(blocker_ids, blocker_refs):
+        c = obs[int(bi), :2]
+        offset_base = float(r_eff + max(0.0, float(lateral_extra)))
+        for side in side_order:
+            for fwd in forward_offsets:
+                for lat_scale in lateral_scales:
+                    w = c + float(side) * p * (offset_base * float(lat_scale)) + d * float(fwd)
+                    t_line, lat_line = line_signed_lateral(start_xy=a, goal_xy=b, point_xy=w)
+                    fwd_m = float(t_line) * L
+                    if waypoint_max_lateral is not None and abs(float(lat_line)) > float(max(0.0, waypoint_max_lateral)):
+                        continue
+                    if fwd_m < float(max(0.0, waypoint_min_forward)):
+                        continue
+                    if waypoint_max_forward is not None and fwd_m > float(max(0.0, waypoint_max_forward)):
+                        continue
+                    if float(np.linalg.norm(w - b)) < float(max(0.0, waypoint_goal_min_dist)):
+                        continue
+
+                    blocked_a_w = line_of_sight_blocked(
+                        start_xy=a,
+                        goal_xy=w,
+                        obstacles_xyr=obs,
+                        robot_radius=robot_radius,
+                        margin=margin,
+                    )
+                    blocked_w_b = line_of_sight_blocked(
+                        start_xy=w,
+                        goal_xy=b,
+                        obstacles_xyr=obs,
+                        robot_radius=robot_radius,
+                        margin=margin,
+                    )
+                    seg1_clear = _segment_min_clearance_sampled(
+                        start_xy=a,
+                        goal_xy=w,
+                        obstacles_xyr=obs,
+                        robot_radius=robot_radius,
+                        margin=margin,
+                    )
+                    seg2_clear = _segment_min_clearance_sampled(
+                        start_xy=w,
+                        goal_xy=b,
+                        obstacles_xyr=obs,
+                        robot_radius=robot_radius,
+                        margin=margin,
+                    )
+                    point_clear = _point_min_clearance(
+                        point_xy=w,
+                        obstacles_xyr=obs,
+                        robot_radius=robot_radius,
+                        margin=margin,
+                    )
+                    min_seg_clear = float(min(seg1_clear, seg2_clear))
+                    path_len = float(np.linalg.norm(a - w) + np.linalg.norm(w - b))
+
+                    clear_short = float(max(0.0, clearance_req - min_seg_clear))
+                    point_short = float(max(0.0, 0.8 * clearance_req - point_clear))
+                    los_pen = (3.0 if blocked_a_w else 0.0) + (5.0 if blocked_w_b else 0.0)
+                    pref_pen = 0.0 if (preferred == 0 or side == preferred) else 0.30
+                    fwd_pen = float(max(0.0, 0.18 - fwd_m))
+                    score = (
+                        path_len
+                        + 55.0 * (clear_short**2)
+                        + 35.0 * (point_short**2)
+                        + 7.5 * los_pen
+                        + 0.45 * fwd_pen
+                        + pref_pen
+                        - 0.30 * float(np.clip(min_seg_clear, 0.0, 0.30))
+                    )
+                    candidates.append(
+                        (
+                            score,
+                            int(side),
+                            np.asarray(w, dtype=np.float32),
+                            float(min_seg_clear),
+                            bool(blocked_a_w),
+                            bool(blocked_w_b),
+                            float(path_len),
+                            float(point_clear),
+                            float(fwd_m),
+                        )
+                    )
+
+    if len(candidates) <= 0:
         return None, 0
-    return np.asarray(best, dtype=np.float32), best_side
+
+    # Passability-first gating:
+    # 1) both segments LOS-clear + enough sampled clearance
+    # 2) both segments LOS-clear + weak clearance floor
+    # 3) fallback to all candidates when scene is very tight
+    tier1 = [
+        c for c in candidates
+        if (not c[4]) and (not c[5]) and (c[3] >= clearance_req)
+    ]
+    tier2 = [
+        c for c in candidates
+        if (not c[4]) and (not c[5]) and (c[3] >= -0.005)
+    ]
+    pool = tier1 if len(tier1) > 0 else (tier2 if len(tier2) > 0 else candidates)
+    pool.sort(key=lambda x: x[0])
+    best = pool[0]
+    return np.asarray(best[2], dtype=np.float32), int(best[1])

@@ -78,6 +78,9 @@ class MPPIController:
         cost_safe_corridor: float = 220.0,
         cost_safe_bounds: float = 0.0,
         cost_safe_bounds_terminal: float = 0.0,
+        collision_step_clearance: float = 0.10,
+        collision_step_scale: float = 0.08,
+        collision_step_hit_scale: float = 2.5,
         cost_ctrl_effort: float = 0.01,
         cost_ctrl_smooth: float = 0.08,
         cost_ctrl_spin: float = 0.08,
@@ -95,6 +98,11 @@ class MPPIController:
         near_penalty_mid_scale: float = 0.35,
         near_penalty_hard_scale: float = 1.20,
         near_penalty_hard_power: float = 3.0,
+        near_progress_start: float = 0.75,
+        near_progress_hard: float = 0.55,
+        near_progress_weight: float = 70.0,
+        near_stall_progress_eps: float = 0.015,
+        near_stall_effort_gate: float = 0.45,
         path_corridor_half_width: float = 0.35,
         near_goal_radius: float = 0.90,
         near_goal_progress_eps: float = 0.003,
@@ -103,6 +111,11 @@ class MPPIController:
         overshoot_tolerance: float = 0.05,
         noise_anneal_dist: float = 1.8,
         noise_anneal_min_scale: float = 0.30,
+        enforce_forward_only: bool = False,
+        forward_min_speed: float = 0.0,
+        diff_wheel_radius: float = 0.04,
+        diff_wheel_base: float = 0.25,
+        diff_drive_sign: float = -1.0,
         world_x_min: float = -1.0e9,
         world_x_max: float = 1.0e9,
         world_y_min: float = -1.0e9,
@@ -156,6 +169,9 @@ class MPPIController:
         self.cost_safe_corridor = float(max(0.0, cost_safe_corridor))
         self.cost_safe_bounds = float(max(0.0, cost_safe_bounds))
         self.cost_safe_bounds_terminal = float(max(0.0, cost_safe_bounds_terminal))
+        self.collision_step_clearance = float(max(0.0, collision_step_clearance))
+        self.collision_step_scale = float(max(0.0, collision_step_scale))
+        self.collision_step_hit_scale = float(max(1.0, collision_step_hit_scale))
 
         self.cost_ctrl_effort = float(max(0.0, cost_ctrl_effort))
         self.cost_ctrl_smooth = float(max(0.0, cost_ctrl_smooth))
@@ -209,6 +225,11 @@ class MPPIController:
         self.near_penalty_mid_scale = float(max(0.0, near_penalty_mid_scale))
         self.near_penalty_hard_scale = float(max(0.0, near_penalty_hard_scale))
         self.near_penalty_hard_power = float(max(1.0, near_penalty_hard_power))
+        self.near_progress_start = float(max(1e-3, near_progress_start))
+        self.near_progress_hard = float(max(1e-3, min(self.near_progress_start - 1e-3, near_progress_hard)))
+        self.near_progress_weight = float(max(0.0, near_progress_weight))
+        self.near_stall_progress_eps = float(max(1e-6, near_stall_progress_eps))
+        self.near_stall_effort_gate = float(max(0.0, near_stall_effort_gate))
         self.path_corridor_half_width = float(max(1e-3, path_corridor_half_width))
         self.near_goal_radius = float(near_goal_radius)
         self.near_goal_progress_eps = float(near_goal_progress_eps)
@@ -217,6 +238,11 @@ class MPPIController:
         self.overshoot_tolerance = float(max(0.0, overshoot_tolerance))
         self.noise_anneal_dist = float(max(0.0, noise_anneal_dist))
         self.noise_anneal_min_scale = float(np.clip(noise_anneal_min_scale, 0.05, 1.0))
+        self.enforce_forward_only = bool(enforce_forward_only)
+        self.forward_min_speed = float(max(0.0, forward_min_speed))
+        self.diff_wheel_radius = float(max(1e-6, diff_wheel_radius))
+        self.diff_wheel_base = float(max(1e-6, diff_wheel_base))
+        self.diff_drive_sign = canonical_drive_sign(float(diff_drive_sign))
         self.world_x_min = float(world_x_min)
         self.world_x_max = float(world_x_max)
         self.world_y_min = float(world_y_min)
@@ -233,6 +259,25 @@ class MPPIController:
             "terminal": 0.0,
             "total": 0.0,
         }
+
+    def _project_forward_only_controls(self, u: torch.Tensor) -> torch.Tensor:
+        if (not self.enforce_forward_only) or u.shape[-1] != 2:
+            return u
+        dq_l = u[..., 0]
+        dq_r = u[..., 1]
+        s = float(self.diff_drive_sign)
+        r = float(self.diff_wheel_radius)
+        wb = float(self.diff_wheel_base)
+        v = s * r * 0.5 * (dq_r + dq_l)
+        w = r * (dq_r - dq_l) / max(wb, 1e-6)
+        v = torch.clamp(v, min=float(self.forward_min_speed))
+        w_lim = 2.0 * v / max(wb, 1e-6)
+        w = torch.clamp(w, -w_lim, w_lim)
+        v_term = (v / s) / max(r, 1e-6)
+        w_term = 0.5 * wb * w / max(r, 1e-6)
+        dq_rn = v_term + w_term
+        dq_ln = v_term - w_term
+        return torch.stack([dq_ln, dq_rn], dim=-1)
 
     def compute_cost(
         self,
@@ -365,7 +410,17 @@ class MPPIController:
             safe = obs_r.view(1, 1, -1) + self.robot_radius
             gap = d - safe
 
-            collision_penalty = torch.clamp(-gap, min=0.0)
+            if self.collision_step_clearance > 1e-6 and self.collision_step_scale > 0.0:
+                # Step-wise collision semantics:
+                # - near-collision band starts before physical contact (gap < clearance)
+                # - true contact/penetration receives a higher discrete level
+                near_step = (gap < float(self.collision_step_clearance)).to(gap.dtype)
+                hit_step = (gap < 0.0).to(gap.dtype)
+                collision_penalty = float(self.collision_step_scale) * (
+                    near_step + (float(self.collision_step_hit_scale) - 1.0) * hit_step
+                )
+            else:
+                collision_penalty = torch.clamp(-gap, min=0.0)
             cost_safety = cost_safety + self.cost_safe_collision * torch.sum(collision_penalty, dim=(1, 2))
 
             # Two-layer near-obstacle penalty:
@@ -381,6 +436,20 @@ class MPPIController:
                 self.near_penalty_mid_scale * near_mid
                 + self.near_penalty_hard_scale * near_hard
             )
+
+            if self.near_progress_weight > 0.0 and dist_goal.shape[1] > 1:
+                step_clear = torch.amin(gap, dim=2)  # [K,T]
+                near_band = max(self.near_progress_start - self.near_progress_hard, 1e-6)
+                near_factor = torch.clamp((self.near_progress_start - step_clear) / near_band, 0.0, 1.0)
+                hard_factor = torch.clamp((self.near_progress_hard - step_clear) / max(self.near_progress_hard, 1e-6), 0.0, 1.0)
+                near_factor = torch.clamp(near_factor + 0.5 * hard_factor * hard_factor, 0.0, 2.0)
+
+                delta_dist = dist_goal[:, :-1] - dist_goal[:, 1:]  # [K,T-1], positive means progress
+                low_prog = torch.relu(self.near_stall_progress_eps - delta_dist) / max(self.near_stall_progress_eps, 1e-6)
+                effort = torch.linalg.norm(actions[:, 1:, :], dim=-1)  # [K,T-1]
+                effort_gain = 1.0 + torch.relu(effort - self.near_stall_effort_gate)
+                near_prog_pen = near_factor[:, :-1] * low_prog * effort_gain
+                cost_safety = cost_safety + self.near_progress_weight * torch.sum(near_prog_pen, dim=1)
 
             # Obstacles behind robot should be much less important than ahead.
             if states.shape[-1] > 2 or pos.shape[1] > 1:
@@ -478,6 +547,7 @@ class MPPIController:
         target,
         obstacles: Optional[np.ndarray] = None,
         reference_traj: Optional[np.ndarray] = None,
+        nominal_u_seq: Optional[np.ndarray] = None,
     ):
         state = torch.tensor(initial_state, dtype=torch.float32, device=self.device).unsqueeze(0).repeat(self.K, 1)
         target_xy = torch.tensor(target[:2], dtype=torch.float32, device=self.device)
@@ -498,6 +568,19 @@ class MPPIController:
                     ref_np = np.concatenate([ref_np[:, :2], pad], axis=0)
                 ref_t = torch.tensor(ref_np[: self.T, :2], dtype=torch.float32, device=self.device)
 
+        u_nom = self.U
+        if nominal_u_seq is not None:
+            nom_np = np.asarray(nominal_u_seq, dtype=np.float32)
+            if nom_np.ndim == 2 and nom_np.shape[0] > 0 and nom_np.shape[1] >= self.u_dim:
+                nom_np = nom_np[:, : self.u_dim]
+                if nom_np.shape[0] < self.T:
+                    pad = np.repeat(nom_np[-1:, :], repeats=self.T - nom_np.shape[0], axis=0)
+                    nom_np = np.concatenate([nom_np, pad], axis=0)
+                u_nom = torch.tensor(nom_np[: self.T, :], dtype=torch.float32, device=self.device)
+                u_nom = torch.max(torch.min(u_nom, self.action_high.view(1, -1)), self.action_low.view(1, -1))
+                u_nom = self._project_forward_only_controls(u_nom)
+                u_nom = torch.max(torch.min(u_nom, self.action_high.view(1, -1)), self.action_low.view(1, -1))
+
         sigma_now = self.noise_sigma
         if self.noise_anneal_dist > 0.0:
             dist_scalar = float(init_dist[0].item())
@@ -510,7 +593,9 @@ class MPPIController:
             sigma = float(np.sqrt(max(1e-8, 1.0 - rho * rho)))
             for t in range(1, self.T):
                 epsilon[:, t, :] = rho * epsilon[:, t - 1, :] + sigma * epsilon[:, t, :]
-        u_samples = self.U.unsqueeze(0) + epsilon
+        u_samples = u_nom.unsqueeze(0) + epsilon
+        u_samples = torch.max(torch.min(u_samples, self.action_high.view(1, 1, -1)), self.action_low.view(1, 1, -1))
+        u_samples = self._project_forward_only_controls(u_samples)
         u_samples = torch.max(torch.min(u_samples, self.action_high.view(1, 1, -1)), self.action_low.view(1, 1, -1))
 
         states = self.rollout(state, u_samples)
@@ -537,7 +622,9 @@ class MPPIController:
         weights = weights / (torch.sum(weights) + 1e-9)
 
         weighted_noise = torch.sum(weights.view(self.K, 1, 1) * epsilon, dim=0)
-        self.U = self.U + weighted_noise
+        self.U = u_nom + weighted_noise
+        self.U = torch.max(torch.min(self.U, self.action_high.view(1, -1)), self.action_low.view(1, -1))
+        self.U = self._project_forward_only_controls(self.U)
         self.U = torch.max(torch.min(self.U, self.action_high.view(1, -1)), self.action_low.view(1, -1))
 
         action = self.U[0].detach().cpu().numpy()

@@ -87,6 +87,10 @@ class SupervisorConfig:
     jam_contact_front_clearance_gate: float = 0.45
     jam_contact_blocked_ratio_min: float = 0.50
     recover_min_rear_clearance: float = 0.18
+    recover_allow_reverse: bool = True
+    recover_forward_enter_front_clearance: float = 0.34
+    recover_forward_enter_min_clearance: float = 0.24
+    recover_forward_blocked_hold: bool = True
 
 
 @dataclass
@@ -107,6 +111,7 @@ class SupervisorInput:
     target_switched_recent: bool = False
     goal_progress_recent: float = float("nan")
     rear_clearance: float = float("inf")
+    measured_speed: float = float("nan")
 
 
 @dataclass
@@ -148,6 +153,9 @@ class SafetySupervisor:
         self.progress_candidate_count = 0
         self.spin_candidate_count = 0
         self.last_rear_clearance = float("inf")
+        self.last_front_clearance = float("inf")
+        self.last_min_clearance = float("inf")
+        self.last_goal_blocked = False
 
         self.dist_hist: deque[float] = deque(maxlen=max(2, int(cfg.progress_window)))
         hist_maxlen = max(cfg.jam_contact_window, cfg.spin_break_window, cfg.progress_window)
@@ -155,6 +163,7 @@ class SafetySupervisor:
         self.yaw_hist: deque[float] = deque(maxlen=max(2, int(cfg.spin_break_window)))
         self.u_norm_hist: deque[float] = deque(maxlen=max(2, int(hist_maxlen)))
         self.v_hist: deque[float] = deque(maxlen=max(2, int(hist_maxlen)))
+        self.v_meas_hist: deque[float] = deque(maxlen=max(2, int(hist_maxlen)))
         self.wz_hist: deque[float] = deque(maxlen=max(2, int(cfg.spin_break_window)))
         self.goal_blocked_hist: deque[float] = deque(maxlen=max(2, int(hist_maxlen)))
         self.front_clearance_hist: deque[float] = deque(maxlen=max(2, int(hist_maxlen)))
@@ -195,6 +204,8 @@ class SafetySupervisor:
         if mode == SupervisorState.SAFE_STOP:
             return np.array([0.0, 0.0], dtype=np.float32)
         if mode == SupervisorState.BACKUP_RECOVER:
+            if not bool(self.cfg.recover_allow_reverse):
+                return np.array([0.0, float(self.turn_sign) * float(self.cfg.recover_turn_rate)], dtype=np.float32)
             # Rear space is insufficient: keep turning instead of forcing blind backup.
             if float(self.last_rear_clearance) < float(self.cfg.recover_min_rear_clearance):
                 return np.array([0.0, float(self.turn_sign) * float(self.cfg.recover_turn_rate)], dtype=np.float32)
@@ -208,6 +219,14 @@ class SafetySupervisor:
         if mode == SupervisorState.ROTATE_RECOVER:
             return np.array([0.0, float(self.turn_sign) * float(self.cfg.recover_turn_rate)], dtype=np.float32)
         if mode == SupervisorState.FORWARD_RECOVER:
+            front_gate = float(max(0.0, self.cfg.recover_forward_enter_front_clearance))
+            min_gate = float(max(0.0, self.cfg.recover_forward_enter_min_clearance))
+            unsafe_front = (
+                float(self.last_front_clearance) < front_gate
+                or float(self.last_min_clearance) < min_gate
+            )
+            if unsafe_front or (bool(self.cfg.recover_forward_blocked_hold) and bool(self.last_goal_blocked)):
+                return np.array([0.0, float(self.turn_sign) * float(self.cfg.recover_turn_rate)], dtype=np.float32)
             return np.array(
                 [
                     float(self.cfg.recover_forward_speed),
@@ -236,6 +255,10 @@ class SafetySupervisor:
         if self.phase_left > 0:
             return
         if self.state == SupervisorState.SAFE_STOP:
+            if int(self.cfg.recover_backup_steps) <= 0 or (not bool(self.cfg.recover_allow_reverse)):
+                self._record_transition(self.state, SupervisorState.ROTATE_RECOVER)
+                self.phase_left = max(1, int(self.cfg.recover_rotate_steps))
+                return
             self._record_transition(self.state, SupervisorState.BACKUP_RECOVER)
             self.phase_left = max(1, int(self.cfg.recover_backup_steps))
             return
@@ -244,6 +267,15 @@ class SafetySupervisor:
             self.phase_left = max(1, int(self.cfg.recover_rotate_steps))
             return
         if self.state == SupervisorState.ROTATE_RECOVER:
+            front_gate = float(max(0.0, self.cfg.recover_forward_enter_front_clearance))
+            min_gate = float(max(0.0, self.cfg.recover_forward_enter_min_clearance))
+            unsafe_front = (
+                float(self.last_front_clearance) < front_gate
+                or float(self.last_min_clearance) < min_gate
+            )
+            if unsafe_front or (bool(self.cfg.recover_forward_blocked_hold) and bool(self.last_goal_blocked)):
+                self.phase_left = max(1, int(max(2, 0.5 * float(self.cfg.recover_rotate_steps))))
+                return
             self._record_transition(self.state, SupervisorState.FORWARD_RECOVER)
             self.phase_left = max(1, int(self.cfg.recover_forward_steps))
             return
@@ -351,12 +383,17 @@ class SafetySupervisor:
 
         v_now = float(inp.state[3]) if inp.state.shape[0] > 3 else 0.0
         self.last_rear_clearance = float(inp.rear_clearance)
+        self.last_front_clearance = float(inp.front_clearance)
+        self.last_min_clearance = float(inp.min_clearance)
+        self.last_goal_blocked = bool(inp.goal_blocked)
         u_norm = float(np.linalg.norm(inp.prev_action))
         self.dist_hist.append(float(inp.dist_goal))
         self.xy_hist.append(np.asarray(inp.base_xy, dtype=np.float32).copy())
         self.yaw_hist.append(float(inp.state[2]))
         self.u_norm_hist.append(u_norm)
+        v_meas = float(inp.measured_speed) if np.isfinite(float(inp.measured_speed)) else abs(v_now)
         self.v_hist.append(abs(v_now))
+        self.v_meas_hist.append(abs(v_meas))
         wz_now = abs(float(inp.state[4])) if inp.state.shape[0] > 4 else 0.0
         self.wz_hist.append(wz_now)
         self.goal_blocked_hist.append(1.0 if bool(inp.goal_blocked) else 0.0)
@@ -486,7 +523,9 @@ class SafetySupervisor:
         if len(self.xy_hist) >= max(2, int(self.cfg.jam_contact_window)) and float(inp.dist_goal) > max(float(self.cfg.progress_stall_min_dist), 0.6):
             jam_disp = float(np.linalg.norm(self.xy_hist[-1] - self.xy_hist[0]))
             jam_u = float(np.mean(np.asarray(self.u_norm_hist, dtype=np.float32))) if len(self.u_norm_hist) > 0 else 0.0
-            jam_v = float(np.mean(np.asarray(self.v_hist, dtype=np.float32))) if len(self.v_hist) > 0 else 0.0
+            jam_v_model = float(np.mean(np.asarray(self.v_hist, dtype=np.float32))) if len(self.v_hist) > 0 else 0.0
+            jam_v_meas = float(np.mean(np.asarray(self.v_meas_hist, dtype=np.float32))) if len(self.v_meas_hist) > 0 else jam_v_model
+            jam_v = float(min(jam_v_model, jam_v_meas))
             wj = max(2, int(self.cfg.jam_contact_window))
             blocked_vals = list(self.goal_blocked_hist)[-wj:]
             front_vals = list(self.front_clearance_hist)[-wj:]
@@ -519,12 +558,16 @@ class SafetySupervisor:
             path_gate = True if not np.isfinite(path_progress) else (path_progress < float(self.cfg.progress_path_min_delta))
             disp = float(np.linalg.norm(np.asarray(xy_vals[-1], dtype=np.float32) - np.asarray(xy_vals[0], dtype=np.float32)))
             u_eff = float(np.mean(np.asarray(u_vals, dtype=np.float32))) if len(u_vals) > 0 else 0.0
-            v_eff = float(np.mean(np.asarray(v_vals, dtype=np.float32))) if len(v_vals) > 0 else 0.0
+            v_eff_model = float(np.mean(np.asarray(v_vals, dtype=np.float32))) if len(v_vals) > 0 else 0.0
+            v_meas_vals = list(self.v_meas_hist)[-w:]
+            v_eff_meas = float(np.mean(np.asarray(v_meas_vals, dtype=np.float32))) if len(v_meas_vals) > 0 else v_eff_model
+            v_eff = float(min(v_eff_model, v_eff_meas))
             blocked_ratio = float(np.mean(np.asarray(blocked_vals, dtype=np.float32))) if len(blocked_vals) > 0 else 0.0
             front_clear_min = float(np.min(np.asarray(front_vals, dtype=np.float32))) if len(front_vals) > 0 else float(inp.front_clearance)
             blocked_gate = (
                 blocked_ratio > float(self.cfg.progress_blocked_ratio_min)
                 or front_clear_min < float(self.cfg.progress_front_clearance_gate)
+                or float(inp.min_clearance) < float(self.cfg.global_stuck_clearance)
             )
             progress_candidate = (
                 goal_progress < float(self.cfg.progress_min_delta)
@@ -563,16 +606,19 @@ class SafetySupervisor:
             front_clear_min = float(np.min(np.asarray(front_vals, dtype=np.float32))) if len(front_vals) > 0 else float(inp.front_clearance)
             target_switch_count = int(np.sum(np.asarray(switch_vals, dtype=np.float32)))
             w_eff = float(np.mean(np.asarray(wz_vals, dtype=np.float32))) if len(wz_vals) > 0 else 0.0
-            v_eff = float(np.mean(np.asarray(v_vals, dtype=np.float32))) if len(v_vals) > 0 else 0.0
+            v_eff_model = float(np.mean(np.asarray(v_vals, dtype=np.float32))) if len(v_vals) > 0 else 0.0
+            v_meas_vals = list(self.v_meas_hist)[-w:]
+            v_eff_meas = float(np.mean(np.asarray(v_meas_vals, dtype=np.float32))) if len(v_meas_vals) > 0 else v_eff_model
+            v_eff = float(min(v_eff_model, v_eff_meas))
             spin_candidate = (
                 progress < float(self.cfg.spin_break_min_progress)
                 and disp < float(self.cfg.spin_break_max_displacement)
                 and yaw_travel > float(self.cfg.spin_break_min_yaw_travel)
                 and w_eff > float(self.cfg.spin_min_wz)
-                and v_eff < float(self.cfg.spin_max_v)
                 and (
                     blocked_ratio > float(self.cfg.spin_blocked_ratio_min)
                     or front_clear_min < float(self.cfg.spin_front_clearance_gate)
+                    or float(inp.min_clearance) < float(self.cfg.global_stuck_clearance)
                 )
                 and target_switch_count <= max(0, int(self.cfg.spin_target_switch_max))
                 and float(inp.dist_goal) > float(self.cfg.progress_stall_min_dist)

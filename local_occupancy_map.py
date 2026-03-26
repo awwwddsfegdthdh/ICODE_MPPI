@@ -27,6 +27,7 @@ class LocalOccupancyMap:
         logodds_decay: float = 0.98,
         logodds_min: float = -4.0,
         logodds_max: float = 4.0,
+        hit_spread_cells: int = 0,
     ):
         self.x_min = float(min(x_range[0], x_range[1]))
         self.x_max = float(max(x_range[0], x_range[1]))
@@ -38,6 +39,7 @@ class LocalOccupancyMap:
         self.logodds_decay = float(np.clip(logodds_decay, 0.8, 1.0))
         self.logodds_min = float(logodds_min)
         self.logodds_max = float(logodds_max)
+        self.hit_spread_cells = int(max(0, hit_spread_cells))
 
         self.nx = int(np.ceil((self.x_max - self.x_min) / self.resolution)) + 1
         self.ny = int(np.ceil((self.y_max - self.y_min) / self.resolution)) + 1
@@ -135,6 +137,22 @@ class LocalOccupancyMap:
                 rr, cc = cells[-1]
                 self.logodds[rr, cc] = np.clip(self.logodds[rr, cc] + self.logodds_hit, self.logodds_min, self.logodds_max)
                 self.observed[rr, cc] = np.clip(self.observed[rr, cc] + 1.0, 0.0, 8.0)
+                if self.hit_spread_cells > 0:
+                    hs = int(self.hit_spread_cells)
+                    for dr in range(-hs, hs + 1):
+                        for dc in range(-hs, hs + 1):
+                            if (dr == 0 and dc == 0) or (dr * dr + dc * dc > hs * hs):
+                                continue
+                            r2 = rr + dr
+                            c2 = cc + dc
+                            if r2 < 0 or r2 >= self.ny or c2 < 0 or c2 >= self.nx:
+                                continue
+                            self.logodds[r2, c2] = np.clip(
+                                self.logodds[r2, c2] + 0.55 * self.logodds_hit,
+                                self.logodds_min,
+                                self.logodds_max,
+                            )
+                            self.observed[r2, c2] = np.clip(self.observed[r2, c2] + 0.8, 0.0, 8.0)
             else:
                 rr, cc = cells[-1]
                 self.logodds[rr, cc] = np.clip(self.logodds[rr, cc] + self.logodds_free, self.logodds_min, self.logodds_max)
@@ -201,10 +219,12 @@ class LocalOccupancyMap:
         for cells in rows:
             xy = np.stack([self.rc_to_world(int(rc[0]), int(rc[1])) for rc in cells], axis=0)
             center = np.mean(xy, axis=0)
-            radius = max(
+            rad_area = max(
                 0.5 * self.resolution,
                 float(np.sqrt(float(cells.shape[0]) / np.pi) * self.resolution),
             )
+            rad_extent = float(np.max(np.linalg.norm(xy - center[None, :], axis=1))) + 0.5 * self.resolution
+            radius = max(rad_area, rad_extent, 0.5 * self.resolution)
             out.append(np.array([center[0], center[1], radius], dtype=np.float32))
         return np.stack(out, axis=0).astype(np.float32)
 

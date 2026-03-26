@@ -56,11 +56,13 @@ class DepthRayModel:
         sample_count: int = 21,
         row_lo: float = 0.45,
         row_hi: float = 0.65,
+        yaw_offset_deg: float = 0.0,
     ):
         self.hfov_deg = float(hfov_deg)
         self.sample_count = max(3, int(sample_count))
         self.row_lo = float(np.clip(row_lo, 0.0, 1.0))
         self.row_hi = float(np.clip(row_hi, 0.0, 1.0))
+        self.yaw_offset_rad = float(np.deg2rad(float(yaw_offset_deg)))
 
     def build_rays(
         self,
@@ -93,11 +95,12 @@ class DepthRayModel:
                 continue
             d = float(np.clip(d, min_range, max_range))
             u = (float(cidx) / max(1.0, float(w - 1))) * 2.0 - 1.0
-            ang = 0.5 * hfov * u
+            ang = 0.5 * hfov * u + self.yaw_offset_rad
+            ang = float((ang + np.pi) % (2.0 * np.pi) - np.pi)
             hit = d < (max_range - 1e-4)
             rays.append(
                 RayObservation(
-                    angle_rad=float(ang),
+                    angle_rad=ang,
                     distance=d,
                     max_range=float(max_range),
                     hit=hit,

@@ -529,6 +529,7 @@ class E1RobotEnv:
         lidar_angles_deg: np.ndarray,
         default_far: float = 10.0,
         collision_threshold: float = 0.30,
+        depth_yaw_offset_deg: float = 0.0,
     ) -> Dict[str, np.ndarray]:
         lidar = self._sanitize_lidar_ranges(np.asarray(lidar_ranges, dtype=np.float32), default_far=float(default_far))
         lidar_ang = np.asarray(lidar_angles_deg, dtype=np.float32).reshape(-1)
@@ -548,20 +549,29 @@ class E1RobotEnv:
             if depth.ndim == 2 and depth.size > 0:
                 valid = np.isfinite(depth) & (depth > 0.0)
                 if np.any(valid):
-                    cols = depth.shape[1]
-                    i0 = int(cols * 0.0)
-                    i1 = int(cols * (1.0 / 3.0))
-                    i2 = int(cols * (2.0 / 3.0))
-                    i3 = cols
-                    d_left = depth[:, i0:i1]
-                    d_front = depth[:, i1:i2]
-                    d_right = depth[:, i2:i3]
-                    if np.any(np.isfinite(d_left) & (d_left > 0.0)):
-                        left = min(left, float(np.nanmin(d_left[np.isfinite(d_left) & (d_left > 0.0)])))
-                    if np.any(np.isfinite(d_front) & (d_front > 0.0)):
-                        front = min(front, float(np.nanmin(d_front[np.isfinite(d_front) & (d_front > 0.0)])))
-                    if np.any(np.isfinite(d_right) & (d_right > 0.0)):
-                        right = min(right, float(np.nanmin(d_right[np.isfinite(d_right) & (d_right > 0.0)])))
+                    h, w = depth.shape
+                    row0 = int(h * 0.45)
+                    row1 = int(h * 0.65)
+                    band = depth[row0:row1, :]
+                    if band.shape[0] > 0:
+                        d_row = np.nanmedian(band, axis=0).astype(np.float32)
+                        idx = np.where(np.isfinite(d_row) & (d_row > 0.0))[0]
+                        if idx.size > 0:
+                            hfov = np.deg2rad(86.0)
+                            yaw_off = np.deg2rad(float(depth_yaw_offset_deg))
+                            uu = (idx.astype(np.float32) / max(1.0, float(w - 1))) * 2.0 - 1.0
+                            ang = 0.5 * hfov * uu + yaw_off
+                            ang = ((ang + np.pi) % (2.0 * np.pi)) - np.pi
+                            dep = d_row[idx]
+                            left_mask = (ang >= np.deg2rad(25.0)) & (ang <= np.deg2rad(100.0))
+                            front_mask = np.abs(ang) <= np.deg2rad(25.0)
+                            right_mask = (ang <= -np.deg2rad(25.0)) & (ang >= -np.deg2rad(100.0))
+                            if np.any(left_mask):
+                                left = min(left, float(np.min(dep[left_mask])))
+                            if np.any(front_mask):
+                                front = min(front, float(np.min(dep[front_mask])))
+                            if np.any(right_mask):
+                                right = min(right, float(np.min(dep[right_mask])))
 
         sector_min = np.array([left, front, right], dtype=np.float32)
         corridor_width = float(np.clip(left + right, 0.0, 2.0 * float(default_far)))
@@ -586,6 +596,7 @@ class E1RobotEnv:
         min_range: float = 0.12,
         depth_max_points: int = 20,
         depth_hfov_deg: float = 86.0,
+        depth_yaw_offset_deg: float = 0.0,
     ) -> np.ndarray:
         x = float(state_est[0])
         y = float(state_est[1])
@@ -627,12 +638,13 @@ class E1RobotEnv:
                         stride = max(1, int(np.ceil(idx.size / max(1, depth_max_points))))
                         idx = idx[::stride]
                         hfov = np.deg2rad(float(depth_hfov_deg))
+                        yaw_off = np.deg2rad(float(depth_yaw_offset_deg))
                         for cidx in idx:
                             rr = float(d_row[cidx])
                             if rr <= min_range or rr >= max_range:
                                 continue
                             u = (float(cidx) / max(1.0, float(w - 1))) * 2.0 - 1.0
-                            ang = 0.5 * hfov * u
+                            ang = 0.5 * hfov * u + yaw_off
                             p_body = np.array([rr * np.cos(ang), rr * np.sin(ang)], dtype=np.float32)
                             p_world = np.array([x, y], dtype=np.float32) + self._body_to_world(p_body, yaw)
                             points_world.append(p_world)
@@ -653,6 +665,7 @@ class E1RobotEnv:
         depth_image: Optional[np.ndarray] = None,
         default_far: float = 10.0,
         collision_threshold: float = 0.30,
+        depth_yaw_offset_deg: float = 0.0,
     ) -> Dict[str, np.ndarray]:
         state = self.get_state()
         assert_state_contract(state)
@@ -669,6 +682,7 @@ class E1RobotEnv:
             lidar_angles_deg=lidar_angles_deg,
             default_far=default_far,
             collision_threshold=collision_threshold,
+            depth_yaw_offset_deg=depth_yaw_offset_deg,
         )
         if goal_xy_odom is None:
             goal_rel_body = np.zeros((2,), dtype=np.float32)

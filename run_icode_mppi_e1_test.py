@@ -18,6 +18,7 @@ from icode_dynamics import ICODEDynamics
 from local_occupancy_map import LocalOccupancyMap
 from mppi import DiffDriveKinematicModel, MPPIController
 from mppi_nav_utils import (
+    blocked_confidence_range_semantics,
     build_reference_traj_from_path,
     compute_boundary_recover_target,
     compute_path_remaining,
@@ -27,9 +28,11 @@ from mppi_nav_utils import (
     line_of_sight_blocked_confidence,
     plan_global_path_xy,
     point_segment_distance_and_t,
+    project_target_to_passable_point,
     project_target_with_invariants,
     sample_obstacles_adaptive,
     select_path_lookahead_target,
+    waypoint_is_feasible,
 )
 from obs_geometry import DepthRayModel, LidarRayModel, fuse_rays_to_hits_free
 from safety_supervisor import (
@@ -224,6 +227,95 @@ def _merge_obstacle_frames(
     return merged.astype(np.float32)
 
 
+def _rays_to_world_obstacles(
+    base_xy: np.ndarray,
+    base_yaw: float,
+    rays: list,
+    min_range: float,
+    max_range: float,
+    base_radius: float,
+    footprint_scale: float,
+    radius_max_scale: float,
+) -> np.ndarray:
+    if rays is None or len(rays) <= 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    angles_all = np.asarray([float(r.angle_rad) for r in rays], dtype=np.float32).reshape(-1)
+    if angles_all.size <= 0:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    base = np.asarray(base_xy, dtype=np.float32).reshape(2)
+    yaw = float(base_yaw)
+    c = float(np.cos(yaw))
+    s = float(np.sin(yaw))
+    rad_min = float(max(0.04, base_radius))
+    rad_max = float(max(rad_min, base_radius * max(1.0, radius_max_scale)))
+    fp_scale = float(max(0.0, footprint_scale))
+    out: list[np.ndarray] = []
+    for r in rays:
+        if not bool(getattr(r, "hit", False)):
+            continue
+        d = float(getattr(r, "distance", 0.0))
+        if (not np.isfinite(d)) or d <= float(min_range) or d >= float(max_range):
+            continue
+        a = float(getattr(r, "angle_rad", 0.0))
+        da = np.abs(np.arctan2(np.sin(angles_all - a), np.cos(angles_all - a)))
+        da = da[da > 1e-4]
+        local_step = float(np.min(da)) if da.size > 0 else float(np.deg2rad(15.0))
+        local_step = float(np.clip(local_step, np.deg2rad(3.0), np.deg2rad(35.0)))
+        footprint = float(d * np.tan(0.5 * local_step) * fp_scale)
+        rr = float(np.clip(max(rad_min, footprint), rad_min, rad_max))
+        xb = d * np.cos(a)
+        yb = d * np.sin(a)
+        pw = np.array([base[0] + c * xb - s * yb, base[1] + s * xb + c * yb, rr], dtype=np.float32)
+        out.append(pw)
+    if len(out) <= 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    arr = np.asarray(out, dtype=np.float32)
+    cell = max(1e-3, 0.7 * rad_min)
+    bins = np.round(arr[:, :2] / cell, decimals=0).astype(np.int32)
+    uniq: dict[tuple[int, int], np.ndarray] = {}
+    for i in range(arr.shape[0]):
+        k = (int(bins[i, 0]), int(bins[i, 1]))
+        old = uniq.get(k)
+        if old is None or float(arr[i, 2]) > float(old[2]):
+            uniq[k] = arr[i]
+    return np.stack(list(uniq.values()), axis=0).astype(np.float32) if len(uniq) > 0 else np.zeros((0, 3), dtype=np.float32)
+
+
+def _fuse_obstacle_sets(
+    obs_a: np.ndarray,
+    obs_b: np.ndarray,
+    cell_size: float,
+    max_points: int,
+) -> np.ndarray:
+    a = np.asarray(obs_a, dtype=np.float32)
+    b = np.asarray(obs_b, dtype=np.float32)
+    if (a.ndim != 2 or a.shape[0] <= 0) and (b.ndim != 2 or b.shape[0] <= 0):
+        return np.zeros((0, 3), dtype=np.float32)
+    frames: list[np.ndarray] = []
+    if a.ndim == 2 and a.shape[0] > 0:
+        frames.append(a)
+    if b.ndim == 2 and b.shape[0] > 0:
+        frames.append(b)
+    merged = np.concatenate(frames, axis=0)
+    if merged.shape[0] <= 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    cell = max(1e-3, float(cell_size))
+    bins = np.round(merged[:, :2] / cell, decimals=0).astype(np.int32)
+    uniq: dict[tuple[int, int], np.ndarray] = {}
+    for i in range(merged.shape[0]):
+        k = (int(bins[i, 0]), int(bins[i, 1]))
+        old = uniq.get(k)
+        if old is None or float(merged[i, 2]) > float(old[2]):
+            uniq[k] = merged[i]
+    out = np.stack(list(uniq.values()), axis=0).astype(np.float32)
+    keep = int(max(1, max_points))
+    if out.shape[0] > keep:
+        sel = np.linspace(0, out.shape[0] - 1, num=keep, dtype=np.int32)
+        out = out[sel]
+    return out.astype(np.float32)
+
+
 def _sanitize_lidar_scan(
     ranges: np.ndarray,
     angles_deg: np.ndarray,
@@ -348,8 +440,13 @@ def add_supervisor_args(parser: argparse.ArgumentParser) -> None:
     g.add_argument("--sup-recover-turn-rate", type=float, default=2.2)
     g.add_argument("--sup-recover-forward-speed", type=float, default=0.20)
     g.add_argument("--sup-recover-forward-turn-rate", type=float, default=0.55)
+    g.add_argument("--sup-recover-forward-enter-front-clearance", type=float, default=0.34)
+    g.add_argument("--sup-recover-forward-enter-min-clearance", type=float, default=0.24)
+    g.add_argument("--sup-recover-forward-blocked-hold", action="store_true", default=True)
+    g.add_argument("--no-sup-recover-forward-blocked-hold", action="store_false", dest="sup_recover_forward_blocked_hold")
     g.add_argument("--sup-recover-refractory-steps", type=int, default=20)
     g.add_argument("--sup-recover-min-rear-clearance", type=float, default=0.18)
+    g.add_argument("--sup-recover-allow-reverse", action="store_true", default=False)
 
     g.add_argument("--sup-bounds-hard-margin", type=float, default=0.35)
     g.add_argument("--sup-boundary-trigger-steps", type=int, default=6)
@@ -403,7 +500,7 @@ def build_supervisor_config(args: argparse.Namespace) -> SupervisorConfig:
         spin_max_v=float(args.sup_spin_max_v),
         spin_front_clearance_gate=float(args.sup_spin_front_clearance_gate),
         recover_stop_steps=max(1, int(args.sup_recover_stop_steps)),
-        recover_backup_steps=max(1, int(args.sup_recover_backup_steps)),
+        recover_backup_steps=max(0, int(args.sup_recover_backup_steps)),
         recover_rotate_steps=max(1, int(args.sup_recover_rotate_steps)),
         recover_forward_steps=max(1, int(args.sup_recover_forward_steps)),
         recover_backup_speed=float(args.sup_recover_backup_speed),
@@ -425,7 +522,93 @@ def build_supervisor_config(args: argparse.Namespace) -> SupervisorConfig:
         jam_contact_front_clearance_gate=float(args.sup_jam_front_clearance_gate),
         jam_contact_blocked_ratio_min=float(args.sup_jam_blocked_ratio_min),
         recover_min_rear_clearance=float(args.sup_recover_min_rear_clearance),
+        recover_allow_reverse=bool(args.sup_recover_allow_reverse),
+        recover_forward_enter_front_clearance=float(args.sup_recover_forward_enter_front_clearance),
+        recover_forward_enter_min_clearance=float(args.sup_recover_forward_enter_min_clearance),
+        recover_forward_blocked_hold=bool(args.sup_recover_forward_blocked_hold),
     )
+
+
+def build_nominal_controls_from_reference(
+    state_now: np.ndarray,
+    reference_traj_xy: np.ndarray | None,
+    horizon: int,
+    dt: float,
+    wheel_radius: float,
+    wheel_base: float,
+    drive_sign: float,
+    max_v: float,
+    max_w: float,
+    kp_linear: float,
+    kp_angular: float,
+    stop_dist: float,
+    forward_only: bool,
+    min_forward_v: float,
+) -> np.ndarray | None:
+    ref = np.asarray(reference_traj_xy, dtype=np.float32) if reference_traj_xy is not None else None
+    if ref is None or ref.ndim != 2 or ref.shape[0] <= 0 or ref.shape[1] < 2:
+        return None
+    h = int(max(1, horizon))
+    dt_ctrl = float(max(1e-4, dt))
+    max_v_abs = float(max(0.0, max_v))
+    max_w_abs = float(max(0.0, max_w))
+    kp_v = float(max(0.0, kp_linear))
+    kp_w = float(max(0.0, kp_angular))
+    stop_r = float(max(0.0, stop_dist))
+    min_v = float(max(0.0, min_forward_v))
+
+    x = np.asarray(state_now, dtype=np.float32).reshape(-1)
+    if x.shape[0] < 3:
+        return None
+    sim_x = float(x[0])
+    sim_y = float(x[1])
+    sim_yaw = float(x[2])
+
+    def _wrap_to_pi(a: float) -> float:
+        return float((a + np.pi) % (2.0 * np.pi) - np.pi)
+
+    controls = np.zeros((h, 2), dtype=np.float32)
+    for t in range(h):
+        tgt = ref[min(t, ref.shape[0] - 1), :2]
+        dx = float(tgt[0] - sim_x)
+        dy = float(tgt[1] - sim_y)
+        dist = float(np.hypot(dx, dy))
+        des_yaw = float(np.arctan2(dy, dx)) if dist > 1e-9 else float(sim_yaw)
+        yaw_err = _wrap_to_pi(des_yaw - sim_yaw)
+
+        if dist <= stop_r:
+            v_cmd = 0.0
+            w_cmd = 0.0
+        else:
+            if bool(forward_only):
+                heading_gate = float(max(0.0, np.cos(yaw_err)))
+                v_cmd = float(np.clip(kp_v * dist * heading_gate, 0.0, max_v_abs))
+                if dist > (1.5 * stop_r):
+                    v_cmd = float(max(v_cmd, min_v))
+            else:
+                v_cmd = float(np.clip(kp_v * dist * np.cos(yaw_err), -max_v_abs, max_v_abs))
+            w_cmd = float(np.clip(kp_w * yaw_err, -max_w_abs, max_w_abs))
+
+        u = diff_drive_inverse(
+            v=float(v_cmd),
+            w=float(w_cmd),
+            wheel_radius=float(wheel_radius),
+            wheel_base=float(wheel_base),
+            drive_sign=float(drive_sign),
+        ).astype(np.float32)
+        controls[t] = u
+
+        vw = diff_drive_forward(
+            u=u,
+            wheel_radius=float(wheel_radius),
+            wheel_base=float(wheel_base),
+            drive_sign=float(drive_sign),
+        )
+        sim_x += float(vw[0]) * np.cos(sim_yaw) * dt_ctrl
+        sim_y += float(vw[0]) * np.sin(sim_yaw) * dt_ctrl
+        sim_yaw = _wrap_to_pi(sim_yaw + float(vw[1]) * dt_ctrl)
+
+    return controls.astype(np.float32)
 
 
 def run_episode(args: argparse.Namespace) -> dict:
@@ -483,6 +666,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         pose_source=args.pose_source,
         heading_source="base",
     )
+    ctrl_dt = float(env.model.opt.timestep * env.control_decimation)
 
     mppi = MPPIController(
         dynamics_model=model,
@@ -511,6 +695,9 @@ def run_episode(args: argparse.Namespace) -> dict:
         cost_safe_corridor=args.cost_safe_corridor,
         cost_safe_bounds=args.cost_safe_bounds,
         cost_safe_bounds_terminal=args.cost_safe_bounds_terminal,
+        collision_step_clearance=args.collision_step_clearance,
+        collision_step_scale=args.collision_step_scale,
+        collision_step_hit_scale=args.collision_step_hit_scale,
         cost_ctrl_effort=args.cost_ctrl_effort,
         cost_ctrl_smooth=args.cost_ctrl_smooth,
         cost_ctrl_spin=args.cost_ctrl_spin,
@@ -528,6 +715,11 @@ def run_episode(args: argparse.Namespace) -> dict:
         near_penalty_mid_scale=args.near_penalty_mid_scale,
         near_penalty_hard_scale=args.near_penalty_hard_scale,
         near_penalty_hard_power=args.near_penalty_hard_power,
+        near_progress_start=args.near_progress_start,
+        near_progress_hard=args.near_progress_hard,
+        near_progress_weight=args.near_progress_weight,
+        near_stall_progress_eps=args.near_stall_progress_eps,
+        near_stall_effort_gate=args.near_stall_effort_gate,
         path_corridor_half_width=args.path_corridor_half_width,
         near_goal_radius=args.near_goal_radius,
         near_goal_progress_eps=args.near_goal_progress_eps,
@@ -536,6 +728,11 @@ def run_episode(args: argparse.Namespace) -> dict:
         overshoot_tolerance=args.overshoot_tolerance,
         noise_anneal_dist=args.noise_anneal_dist,
         noise_anneal_min_scale=args.noise_anneal_min_scale,
+        enforce_forward_only=bool(args.nominal_forward_only),
+        forward_min_speed=0.0,
+        diff_wheel_radius=float(args.wheel_radius),
+        diff_wheel_base=float(args.wheel_base),
+        diff_drive_sign=float(args.v_forward_sign),
         world_x_min=min(args.bounds_x_range[0], args.bounds_x_range[1]),
         world_x_max=max(args.bounds_x_range[0], args.bounds_x_range[1]),
         world_y_min=min(args.bounds_y_range[0], args.bounds_y_range[1]),
@@ -661,10 +858,14 @@ def run_episode(args: argparse.Namespace) -> dict:
             wheel_base=float(args.wheel_base),
             drive_sign=float(args.v_forward_sign),
         )
-        v_cmd = float(vw[0])
-        if v_cmd >= float(min_v):
-            return u.astype(np.float32), False
-        return diff_drive_to_wheels(v_cmd=float(min_v), w_cmd=float(vw[1])), True
+        v_cmd = float(max(float(vw[0]), float(min_v)))
+        # Forward-only semantics must constrain yaw-rate as well; otherwise
+        # reverse proposals can be projected into in-place spins.
+        w_lim = float(2.0 * max(v_cmd, 0.0) / max(float(args.wheel_base), 1e-6))
+        w_cmd = float(np.clip(float(vw[1]), -w_lim, w_lim))
+        u_proj = diff_drive_to_wheels(v_cmd=v_cmd, w_cmd=w_cmd)
+        projected = bool(np.linalg.norm(u_proj - u) > 1e-6)
+        return u_proj.astype(np.float32), projected
 
     def project_nominal_forward_action(action_u: np.ndarray, terminal_mode: bool = False) -> tuple[np.ndarray, bool]:
         if not bool(args.nominal_forward_only):
@@ -674,6 +875,21 @@ def run_episode(args: argparse.Namespace) -> dict:
         else:
             min_v = float(max(float(args.nominal_min_forward_speed), float(args.nav_min_forward_speed), 0.0))
         return project_forward_action(action_u=action_u, min_v=min_v)
+
+    def project_delta_action(action_u: np.ndarray, prev_u: np.ndarray, max_delta_u: float) -> tuple[np.ndarray, bool]:
+        u = np.asarray(action_u, dtype=np.float32).reshape(2)
+        prev = np.asarray(prev_u, dtype=np.float32).reshape(2)
+        md = float(max(0.0, max_delta_u))
+        if md <= 0.0:
+            return u, False
+        du = u - prev
+        if bool(args.soft_delta_projection):
+            du_proj = md * np.tanh(du / max(md, 1e-6))
+        else:
+            du_proj = np.clip(du, -md, md)
+        u_proj = prev + du_proj
+        projected = bool(np.linalg.norm(u_proj - u) > 1e-6)
+        return u_proj.astype(np.float32), projected
 
     def apply_semantic_speed_cap(
         action_u: np.ndarray,
@@ -795,6 +1011,7 @@ def run_episode(args: argparse.Namespace) -> dict:
     depth_ray_model = DepthRayModel(
         hfov_deg=float(args.sensor_depth_hfov_deg),
         sample_count=max(7, int(args.sensor_depth_max_points)),
+        yaw_offset_deg=float(args.sensor_depth_yaw_offset_deg),
     )
     depth_gate = DepthConsistencyGate(
         window=int(args.depth_gate_window),
@@ -807,6 +1024,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         x_range=(float(args.map_x_range[0]), float(args.map_x_range[1])),
         y_range=(float(args.map_y_range[0]), float(args.map_y_range[1])),
         resolution=float(args.map_resolution),
+        hit_spread_cells=int(args.map_hit_spread_cells),
     )
 
     front_obs_memory: deque[np.ndarray] = deque(maxlen=max(1, int(args.front_guide_hold_steps)))
@@ -867,11 +1085,30 @@ def run_episode(args: argparse.Namespace) -> dict:
             min_range=float(args.sensor_obs_min_range),
             max_range=float(args.sensor_obs_max_range),
         )
-        obstacles = occ_map.extract_obstacles_as_circles(
+        obstacles_map = occ_map.extract_obstacles_as_circles(
             threshold=float(args.map_occ_threshold),
             min_cluster_cells=int(args.map_min_cluster_cells),
             max_obstacles=int(args.map_max_obstacles),
         )
+        if bool(args.sensor_use_ray_obstacles):
+            obstacles_ray = _rays_to_world_obstacles(
+                base_xy=state_now[:2],
+                base_yaw=float(state_now[2]),
+                rays=rays,
+                min_range=float(args.sensor_obs_min_range),
+                max_range=float(args.sensor_obs_max_range),
+                base_radius=float(args.sensor_obs_radius),
+                footprint_scale=float(args.sensor_ray_footprint_scale),
+                radius_max_scale=float(args.sensor_ray_radius_max_scale),
+            )
+            obstacles = _fuse_obstacle_sets(
+                obs_a=obstacles_map,
+                obs_b=obstacles_ray,
+                cell_size=float(args.sensor_obs_radius),
+                max_points=int(args.map_max_obstacles),
+            )
+        else:
+            obstacles = obstacles_map
         occ_grid = occ_map.occupancy(threshold=float(args.map_occ_threshold))
         occ_observed = occ_map.observed_mask(threshold=float(args.map_observed_threshold))
         occ_meta = occ_map.as_meta()
@@ -894,8 +1131,12 @@ def run_episode(args: argparse.Namespace) -> dict:
         return front.astype(np.float32)
 
     def update_front_obstacle_memory(obstacles_all: np.ndarray, state_now: np.ndarray) -> np.ndarray:
-        front = select_front_obstacles(obstacles_xyr=obstacles_all, state_now=state_now)
-        front_obs_memory.append(front)
+        if bool(args.guide_use_all_obstacles):
+            obs_all = np.asarray(obstacles_all, dtype=np.float32)
+            cur = obs_all if (obs_all.ndim == 2) else np.zeros((0, 3), dtype=np.float32)
+        else:
+            cur = select_front_obstacles(obstacles_xyr=obstacles_all, state_now=state_now)
+        front_obs_memory.append(cur)
         merged = _merge_obstacle_frames(
             frames=front_obs_memory,
             cell_size=float(args.sensor_obs_radius),
@@ -997,6 +1238,8 @@ def run_episode(args: argparse.Namespace) -> dict:
     mppi_action_steps = 0
     terminal_mppi_steps = 0
     speed_cap_applied_steps = 0
+    delta_projection_applied_steps = 0
+    action_bound_clip_steps = 0
     dock_action_steps = 0
     action_source_hist: list[str] = []
     trigger_reason_hist: list[str] = []
@@ -1022,6 +1265,7 @@ def run_episode(args: argparse.Namespace) -> dict:
     waypoint_forced_side = 0
     waypoint_replans = 0
     waypoint_active_steps = 0
+    waypoint_infeasible_count = 0
     waypoint_stuck_events = 0
     waypoint_stuck_force_events = 0
     force_waypoint_events = 0
@@ -1039,12 +1283,18 @@ def run_episode(args: argparse.Namespace) -> dict:
     target_bound_projected_steps = 0
     target_corridor_projected_steps = 0
     target_jump_projected_steps = 0
+    target_passability_projected_steps = 0
     boundary_soft_steps = 0
     guide_path_xy = None
     guide_progress_idx = 0
     guide_replans = 0
     guide_active_steps = 0
     guide_fail_steps = 0
+    guide_fail_cause_counts = {"search_fail": 0, "passability_reject": 0, "other": 0}
+    guide_replan_fail_streak = 0
+    guide_replan_cooldown = 0
+    guide_last_fail_pose = None
+    guide_last_fail_yaw = 0.0
     guide_commit_side = 0
     guide_commit_until_step = -1
     guide_commit_dist_ref = 0.0
@@ -1063,8 +1313,9 @@ def run_episode(args: argparse.Namespace) -> dict:
     nominal_reverse_suppressed_steps = 0
     dock_reverse_suppressed_steps = 0
     mppi_reverse_raw_steps = 0
-    guide_robot_radius = float(args.robot_radius if args.oracle_mode else args.sensor_guide_robot_radius)
-    guide_inflate_margin = float(args.scene_path_inflate_margin if args.oracle_mode else args.sensor_guide_inflate_margin)
+    # Razor principle: keep a single traversability radius/inflation semantics end-to-end.
+    guide_robot_radius = float(args.robot_radius)
+    guide_inflate_margin = float(args.scene_path_inflate_margin)
     guide_los_margin = float(args.goal_los_margin if args.oracle_mode else args.sensor_goal_los_margin)
     waypoint_margin_eff = float(args.waypoint_margin if args.oracle_mode else args.sensor_waypoint_margin)
 
@@ -1074,6 +1325,8 @@ def run_episode(args: argparse.Namespace) -> dict:
         boundary_just_released = False
         if boundary_recover_latch_steps > 0:
             boundary_recover_latch_steps -= 1
+        if guide_replan_cooldown > 0:
+            guide_replan_cooldown -= 1
         recover_reentry_blocked = supervisor.cooldown_left > 0
         sensor_lidar_scan_now = np.array([args.sensor_default_far, args.sensor_default_far, args.sensor_default_far], dtype=np.float32)
         sensor_lidar_angles_now = np.array([30.0, 0.0, -30.0], dtype=np.float32)
@@ -1104,6 +1357,7 @@ def run_episode(args: argparse.Namespace) -> dict:
                 depth_image=depth_now,
                 default_far=float(args.sensor_default_far),
                 collision_threshold=float(args.sensor_collision_threshold),
+                depth_yaw_offset_deg=float(args.sensor_depth_yaw_offset_deg),
             )
             state = obs_now["state_est"].astype(np.float32)
             base_xy_now = state[:2].copy()
@@ -1184,9 +1438,10 @@ def run_episode(args: argparse.Namespace) -> dict:
                 icode_fallback_triggered = True
         side_clearance = float(np.min(sector_now[[0, 2]])) if sector_now.shape[0] >= 3 else float(pre_min_clearance)
 
-        _, goal_blocked_conf, _, _ = line_of_sight_blocked_confidence(
+        _, goal_blocked_conf, _ = blocked_confidence_range_semantics(
             start_xy=base_xy_now,
             goal_xy=goal_xy,
+            heading_xy=(base_xy_now + np.array([float(np.cos(float(state[2]))), float(np.sin(float(state[2])))], dtype=np.float32)),
             obstacles_xyr=obstacles_guide,
             robot_radius=guide_robot_radius,
             margin=guide_los_margin,
@@ -1194,6 +1449,10 @@ def run_episode(args: argparse.Namespace) -> dict:
             occ_observed=occ_observed_nav if (not args.oracle_mode) else None,
             occ_min_xy=occ_min_xy_nav if (not args.oracle_mode) else None,
             occ_resolution=occ_res_nav if (not args.oracle_mode) else None,
+            corridor_len=float(args.goal_blocked_corridor_len),
+            corridor_half_width=float(args.goal_blocked_corridor_half_width),
+            front_fov_deg=float(args.goal_blocked_front_fov_deg),
+            front_range=float(args.goal_blocked_front_range),
             blocked_conf_threshold=float(args.goal_blocked_enter_conf),
         )
         goal_blocked_conf_hist.append(float(goal_blocked_conf))
@@ -1312,6 +1571,13 @@ def run_episode(args: argparse.Namespace) -> dict:
         if len(goal_progress_hist) >= 2:
             dgoal_recent = float(goal_progress_hist[0] - goal_progress_hist[-1])
         supervisor_prev_state = supervisor.state.value
+        if len(base_xy_hist) > 0:
+            measured_speed_now = float(
+                np.linalg.norm(base_xy_now - np.asarray(base_xy_hist[-1], dtype=np.float32))
+                / max(float(ctrl_dt), 1e-6)
+            )
+        else:
+            measured_speed_now = 0.0
         supervisor_decision = supervisor.step(
             SupervisorInput(
                 step=int(step),
@@ -1330,6 +1596,7 @@ def run_episode(args: argparse.Namespace) -> dict:
                 target_switched_recent=bool(target_switched_recent),
                 goal_progress_recent=float(dgoal_recent),
                 rear_clearance=float(rear_clearance_now),
+                measured_speed=float(measured_speed_now),
             )
         )
         trigger_reason = str(supervisor_decision.trigger_reason)
@@ -1432,6 +1699,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         else:
             target_for_mppi = goal_xy
             reference_traj = None
+            nominal_u_seq = None
             used_global_guide = False
             goal_direct_dist_eff = float(args.goal_direct_dist)
             if not args.oracle_mode:
@@ -1456,7 +1724,7 @@ def run_episode(args: argparse.Namespace) -> dict:
                 guide_commit_until_step = -1
                 path_remain_hist = []
                 used_global_guide = True
-            elif args.global_guide and force_waypoint_latch_steps <= 0:
+            elif args.global_guide:
                 need_guide_replan = (
                     (step % max(1, args.guide_replan_interval) == 0)
                     or (guide_path_xy is None)
@@ -1472,9 +1740,27 @@ def run_episode(args: argparse.Namespace) -> dict:
                             need_guide_replan = True
                     elif dist_to_path > max(0.1, float(args.waypoint_switch_radius)):
                         need_guide_replan = True
-                if need_guide_replan:
+                can_retry_fail = False
+                if guide_last_fail_pose is not None:
+                    moved = float(np.linalg.norm(base_xy_now - np.asarray(guide_last_fail_pose, dtype=np.float32)))
+                    yaw_delta = float(abs(((float(state[2]) - float(guide_last_fail_yaw) + np.pi) % (2.0 * np.pi)) - np.pi))
+                    can_retry_fail = (
+                        moved >= float(args.guide_fail_retry_min_move)
+                        or yaw_delta >= float(args.guide_fail_retry_min_yaw)
+                    )
+                replan_gate = bool(need_guide_replan)
+                if (
+                    replan_gate
+                    and guide_replan_cooldown > 0
+                    and (not boundary_just_released)
+                    and boundary_recover_latch_steps <= 0
+                    and (not can_retry_fail)
+                ):
+                    replan_gate = False
+                if replan_gate:
                     guide_replans += 1
-                    guide_path_xy = plan_global_path_xy(
+                    plan_debug = {}
+                    guide_path_candidate = plan_global_path_xy(
                         start_xy=base_xy_now.astype(np.float32),
                         goal_xy=goal_xy.astype(np.float32),
                         obstacles_xyr=obstacles_guide.astype(np.float32),
@@ -1486,24 +1772,52 @@ def run_episode(args: argparse.Namespace) -> dict:
                         occ_grid=occ_grid_nav if (not args.oracle_mode) else None,
                         occ_min_xy=occ_min_xy_nav if (not args.oracle_mode) else None,
                         occ_resolution=occ_res_nav if (not args.oracle_mode) else None,
+                        planner=str(args.global_planner),
+                        start_yaw=float(state[2]),
+                        passability_check=bool(args.planner_passability_check),
+                        passability_margin=float(args.planner_passability_margin),
+                        passability_min_clearance=float(args.planner_passability_min_clearance),
+                        hybrid_n_theta=int(args.hybrid_n_theta),
+                        hybrid_step_cells=float(args.hybrid_step_cells),
+                        hybrid_turn_penalty=float(args.hybrid_turn_penalty),
+                        hybrid_max_expansions=int(args.hybrid_max_expansions),
+                        debug_info=plan_debug,
                     )
-                    guide_progress_idx = 0
+                    fail_cause = str(plan_debug.get("fail_cause", "other"))
+                    if guide_path_candidate is not None and guide_path_candidate.shape[0] >= 2:
+                        guide_path_xy = guide_path_candidate
+                        guide_progress_idx = 0
+                        guide_replan_fail_streak = 0
+                        guide_replan_cooldown = 0
+                        guide_last_fail_pose = None
+                        guide_last_fail_yaw = float(state[2])
+                    else:
+                        if fail_cause not in guide_fail_cause_counts:
+                            fail_cause = "other"
+                        guide_fail_cause_counts[fail_cause] += 1
+                        guide_replan_fail_streak += 1
+                        fail_backoff = int(
+                            max(1, int(args.guide_fail_latch_steps))
+                            * min(max(1, int(args.guide_fail_backoff_mult_cap)), guide_replan_fail_streak)
+                        )
+                        guide_replan_cooldown = int(
+                            min(max(1, int(args.guide_fail_latch_max_steps)), fail_backoff)
+                        )
+                        guide_last_fail_pose = base_xy_now.astype(np.float32).copy()
+                        guide_last_fail_yaw = float(state[2])
                 if guide_path_xy is not None and guide_path_xy.shape[0] >= 2:
                     path_remain_now, guide_idx_rem = compute_path_remaining(
                         path_xy=guide_path_xy,
                         current_xy=base_xy_now.astype(np.float32),
-                        min_index=int(guide_progress_idx),
+                        min_index=0,
                     )
-                    guide_floor = max(0, int(guide_progress_idx) - max(0, int(args.guide_backtrack_max)))
-                    guide_progress_idx = max(int(guide_floor), int(guide_idx_rem))
                     target_for_mppi, guide_idx = select_path_lookahead_target(
                         path_xy=guide_path_xy,
                         current_xy=base_xy_now.astype(np.float32),
                         lookahead_m=float(args.guide_lookahead),
-                        min_index=int(guide_progress_idx),
+                        min_index=0,
                     )
-                    guide_floor = max(0, int(guide_progress_idx) - max(0, int(args.guide_backtrack_max)))
-                    guide_progress_idx = max(int(guide_floor), int(guide_idx))
+                    guide_progress_idx = int(guide_idx)
                     path_remain_hist.append(float(path_remain_now))
                     if len(path_remain_hist) > max(2, int(args.sup_progress_window)):
                         path_remain_hist.pop(0)
@@ -1558,22 +1872,71 @@ def run_episode(args: argparse.Namespace) -> dict:
                     guide_fail_steps += 1
                     guide_failed_this_step = True
 
+            planner_clear_req = float(max(0.0, args.planner_passability_min_clearance))
+            planner_margin_req = float(max(0.0, args.planner_passability_margin))
+            target_guard_clear_req = float(max(0.0, args.target_guard_min_clearance, planner_clear_req))
+            target_guard_margin_req = float(max(0.0, args.target_guard_margin, planner_margin_req))
             if (not used_global_guide) and args.auto_waypoint:
+                wp_seg_clear_req = float(max(0.0, args.waypoint_infeasible_min_clearance, planner_clear_req))
+                wp_point_clear_req = float(max(0.0, 0.5 * wp_seg_clear_req))
                 if waypoint_xy is not None:
                     if float(np.linalg.norm(base_xy_now - waypoint_xy)) <= args.waypoint_switch_radius:
                         waypoint_xy = None
                         waypoint_hold_steps = 0
+                        waypoint_infeasible_count = 0
                     else:
                         waypoint_hold_steps += 1
-                        if (
-                            args.waypoint_use_los_gating
-                            and (not goal_blocked)
-                            and goal_los_clear_count >= args.waypoint_clear_hysteresis_steps
-                            and waypoint_hold_steps >= args.waypoint_min_hold_steps
-                        ):
-                            waypoint_xy = None
-                            waypoint_hold_steps = 0
-                need_replan = (step % max(1, args.waypoint_replan_interval) == 0) or (waypoint_xy is None)
+                        wp_ok = waypoint_is_feasible(
+                            base_xy=base_xy_now,
+                            waypoint_xy=waypoint_xy,
+                            goal_xy=goal_xy,
+                            obstacles_xyr=obstacles_guide,
+                            robot_radius=guide_robot_radius,
+                            margin=waypoint_margin_eff,
+                            min_seg_clearance=wp_seg_clear_req,
+                            min_point_clearance=wp_point_clear_req,
+                            goal_min_dist=float(args.waypoint_goal_min_dist),
+                        )
+                        if not wp_ok:
+                            waypoint_infeasible_count += 1
+                            if waypoint_infeasible_count >= max(1, int(args.waypoint_infeasible_confirm_steps)):
+                                waypoint_xy = None
+                                waypoint_hold_steps = 0
+                                waypoint_infeasible_count = 0
+                                if waypoint_forced_side == 0:
+                                    side_hint = choose_turn_sign(
+                                        pick_turn_sign_from_nearest_obstacle(state_now=state, base_xy_now=base_xy_now),
+                                        sensor_lidar_triplet_now,
+                                        lidar_ranges=sensor_lidar_scan_now,
+                                        lidar_angles_deg=sensor_lidar_angles_now,
+                                    )
+                                    waypoint_forced_side = int(np.sign(side_hint)) if side_hint != 0.0 else 1
+                                if args.auto_waypoint and supervisor.state == SupervisorState.NORMAL and nav_mode == "NAV":
+                                    prev_latch = int(force_waypoint_latch_steps)
+                                    force_waypoint_latch_steps = max(
+                                        force_waypoint_latch_steps,
+                                        max(1, int(args.waypoint_infeasible_force_latch_steps)),
+                                    )
+                                    if int(force_waypoint_latch_steps) > prev_latch:
+                                        waypoint_stuck_force_events += 1
+                                    guide_path_xy = None
+                                    guide_progress_idx = 0
+                                    guide_commit_side = 0
+                                    guide_commit_buf = []
+                        else:
+                            waypoint_infeasible_count = 0
+                            if (
+                                args.waypoint_use_los_gating
+                                and (not goal_blocked)
+                                and goal_los_clear_count >= args.waypoint_clear_hysteresis_steps
+                                and waypoint_hold_steps >= args.waypoint_min_hold_steps
+                            ):
+                                waypoint_xy = None
+                                waypoint_hold_steps = 0
+                                waypoint_infeasible_count = 0
+                need_replan = bool(waypoint_xy is None)
+                if args.waypoint_replan_on_interval:
+                    need_replan = need_replan or (step % max(1, args.waypoint_replan_interval) == 0)
                 should_replan = True
                 allow_forced_waypoint = bool(waypoint_forced_side != 0)
                 if (
@@ -1610,6 +1973,7 @@ def run_episode(args: argparse.Namespace) -> dict:
                         waypoint_max_lateral=waypoint_max_lateral_eff,
                         waypoint_min_forward=float(args.waypoint_min_forward),
                         waypoint_max_forward=waypoint_max_forward_eff,
+                        waypoint_goal_min_dist=float(args.waypoint_goal_min_dist),
                     )
                     if wp is None:
                         side_pref = int(np.sign(waypoint_forced_side))
@@ -1637,12 +2001,37 @@ def run_episode(args: argparse.Namespace) -> dict:
                         fwd_len = float(np.clip(0.8 * float(args.guide_lookahead) + fwd_boost, 0.45, 1.60))
                         lat_len = float(np.clip(float(args.waypoint_lateral_extra) + lat_boost, 0.20, 1.40))
                         wp = base_xy_now + fwd_len * gdir + float(side_pref) * lat_len * gperp
+                        # Keep waypoint separated from goal so escape logic is preserved.
+                        if float(np.linalg.norm(wp - goal_xy)) < float(args.waypoint_goal_min_dist):
+                            away = base_xy_now - goal_xy
+                            away_n = float(np.linalg.norm(away))
+                            if away_n < 1e-6:
+                                away = -gdir
+                                away_n = float(np.linalg.norm(away))
+                            away = away / max(away_n, 1e-6)
+                            wp = goal_xy + away * float(args.waypoint_goal_min_dist) + float(side_pref) * 0.35 * lat_len * gperp
                         side = int(side_pref)
-                    waypoint_replans += 1
-                    waypoint_xy = wp
-                    waypoint_last_side = int(side)
-                    waypoint_forced_side = 0
-                    waypoint_hold_steps = 0
+                    if wp is not None:
+                        wp_ok = waypoint_is_feasible(
+                            base_xy=base_xy_now,
+                            waypoint_xy=wp,
+                            goal_xy=goal_xy,
+                            obstacles_xyr=obstacles_guide,
+                            robot_radius=guide_robot_radius,
+                            margin=waypoint_margin_eff,
+                            min_seg_clearance=wp_seg_clear_req,
+                            min_point_clearance=wp_point_clear_req,
+                            goal_min_dist=float(args.waypoint_goal_min_dist),
+                        )
+                        if not wp_ok:
+                            wp = None
+                    if wp is not None:
+                        waypoint_replans += 1
+                        waypoint_xy = wp
+                        waypoint_last_side = int(side)
+                        waypoint_forced_side = 0
+                        waypoint_hold_steps = 0
+                        waypoint_infeasible_count = 0
                 if waypoint_xy is not None:
                     target_for_mppi = waypoint_xy
                     waypoint_active_steps += 1
@@ -1691,6 +2080,22 @@ def run_episode(args: argparse.Namespace) -> dict:
                 target_corridor_projected_steps += 1
             if float(target_proj_info.get("jump_projected", 0.0)) > 0.5:
                 target_jump_projected_steps += 1
+            fallback_passability_required = bool((not used_global_guide) and args.auto_waypoint)
+            if bool(args.target_passability_guard) or fallback_passability_required:
+                target_for_mppi, target_pass_info = project_target_to_passable_point(
+                    candidate_xy=np.asarray(target_for_mppi, dtype=np.float32),
+                    base_xy=base_xy_now.astype(np.float32),
+                    obstacles_xyr=obstacles_nav,
+                    robot_radius=float(args.robot_radius),
+                    margin=float(target_guard_margin_req),
+                    min_seg_clearance=float(target_guard_clear_req),
+                    path_xy=ref_path_for_target,
+                    min_progress=float(max(0.0, args.target_guard_min_progress)),
+                    backtrack_points=int(max(1, args.target_guard_backtrack_points)),
+                    ray_samples=int(max(2, args.target_guard_ray_samples)),
+                )
+                if float(target_pass_info.get("passability_projected", 0.0)) > 0.5:
+                    target_passability_projected_steps += 1
 
             target_active_hist.append(np.asarray(target_for_mppi, dtype=np.float32))
             current_nav_target = np.asarray(target_for_mppi, dtype=np.float32)
@@ -1703,11 +2108,29 @@ def run_episode(args: argparse.Namespace) -> dict:
                     profile=_adaptive_profile("DOCK"),
                     alpha=float(args.terminal_profile_alpha),
                 )
+            if bool(args.reference_sampling):
+                nominal_u_seq = build_nominal_controls_from_reference(
+                    state_now=np.asarray(state, dtype=np.float32),
+                    reference_traj_xy=reference_traj,
+                    horizon=int(args.horizon),
+                    dt=float(ctrl_dt),
+                    wheel_radius=float(args.wheel_radius),
+                    wheel_base=float(args.wheel_base),
+                    drive_sign=float(args.v_forward_sign),
+                    max_v=float(args.reference_nominal_v_max),
+                    max_w=float(args.reference_nominal_w_max),
+                    kp_linear=float(args.reference_tracker_kp_v),
+                    kp_angular=float(args.reference_tracker_kp_w),
+                    stop_dist=float(args.reference_tracker_stop_dist),
+                    forward_only=bool(args.reference_tracker_forward_only),
+                    min_forward_v=float(args.reference_tracker_min_v),
+                )
             action = mppi.get_action(
                 initial_state=state,
                 target=target_for_mppi,
                 obstacles=obstacles_nav,
                 reference_traj=reference_traj,
+                nominal_u_seq=nominal_u_seq,
             )
             action_source = "MPPI"
 
@@ -1748,7 +2171,13 @@ def run_episode(args: argparse.Namespace) -> dict:
             if float(vw_raw[0]) < -1e-5:
                 mppi_reverse_raw_steps += 1
             if args.max_delta_u > 0.0:
-                action = np.clip(action, prev_action - args.max_delta_u, prev_action + args.max_delta_u)
+                action, delta_projected = project_delta_action(
+                    action_u=action,
+                    prev_u=prev_action,
+                    max_delta_u=float(args.max_delta_u),
+                )
+                if delta_projected:
+                    delta_projection_applied_steps += 1
             action, projected = project_nominal_forward_action(action_u=action, terminal_mode=terminal_mppi_mode)
             if projected:
                 nominal_reverse_suppressed_steps += 1
@@ -1762,7 +2191,10 @@ def run_episode(args: argparse.Namespace) -> dict:
             if speed_capped:
                 speed_cap_applied_steps += 1
 
-        action = np.clip(action, env.ctrl_low, env.ctrl_high).astype(np.float32)
+        action_pre_bound = np.asarray(action, dtype=np.float32).copy()
+        action = np.clip(action_pre_bound, env.ctrl_low, env.ctrl_high).astype(np.float32)
+        if float(np.linalg.norm(action - action_pre_bound)) > 1e-6:
+            action_bound_clip_steps += 1
         post_delta_norm = float(np.linalg.norm(action - planner_action_raw))
         action_post_delta_norm_hist.append(post_delta_norm)
         if action_source == "MPPI":
@@ -1792,6 +2224,7 @@ def run_episode(args: argparse.Namespace) -> dict:
                 depth_image=depth_after,
                 default_far=float(args.sensor_default_far),
                 collision_threshold=float(args.sensor_collision_threshold),
+                depth_yaw_offset_deg=float(args.sensor_depth_yaw_offset_deg),
             )
             state = obs_after["state_est"].astype(np.float32)
             base_xy = state[:2].copy()
@@ -1931,6 +2364,8 @@ def run_episode(args: argparse.Namespace) -> dict:
         "mppi_action_steps": int(mppi_action_steps),
         "terminal_mppi_steps": int(terminal_mppi_steps),
         "speed_cap_applied_steps": int(speed_cap_applied_steps),
+        "delta_projection_applied_steps": int(delta_projection_applied_steps),
+        "action_bound_clip_steps": int(action_bound_clip_steps),
         "dock_action_steps": int(dock_action_steps),
         "mppi_reverse_raw_steps": int(mppi_reverse_raw_steps),
         "nominal_reverse_suppressed_steps": int(nominal_reverse_suppressed_steps),
@@ -1976,12 +2411,15 @@ def run_episode(args: argparse.Namespace) -> dict:
         "global_guide_replans": int(guide_replans),
         "global_guide_active_steps": int(guide_active_steps),
         "global_guide_fail_steps": int(guide_fail_steps),
+        "global_guide_fail_cause_counts": {k: int(v) for k, v in guide_fail_cause_counts.items()},
+        "global_guide_replan_cooldown_final": int(guide_replan_cooldown),
         "corridor_commit_enabled": bool(args.corridor_commit),
         "corridor_commit_active_steps": int(guide_commit_active_steps),
         "corridor_commit_flip_events": int(guide_commit_flip_events),
         "target_bound_projected_steps": int(target_bound_projected_steps),
         "target_corridor_projected_steps": int(target_corridor_projected_steps),
         "target_jump_projected_steps": int(target_jump_projected_steps),
+        "target_passability_projected_steps": int(target_passability_projected_steps),
         "goal_direct_steps": int(goal_direct_steps),
         "goal_blocked_steps": int(goal_blocked_steps),
         "goal_blocked_ratio": float(goal_blocked_steps / max(1, action_arr.shape[0])),
@@ -2000,6 +2438,12 @@ def run_episode(args: argparse.Namespace) -> dict:
         "action_post_delta_norm_max": float(np.max(action_post_delta_arr)) if action_post_delta_arr.size > 0 else 0.0,
         "action_post_delta_ratio": action_post_delta_ratio,
         "action_post_delta_ratio_mppi": action_post_delta_ratio_mppi,
+        "action_post_breakdown_steps": {
+            "speed_cap": int(speed_cap_applied_steps),
+            "delta_projection": int(delta_projection_applied_steps),
+            "reverse_suppress": int(nominal_reverse_suppressed_steps + dock_reverse_suppressed_steps),
+            "bound_clip": int(action_bound_clip_steps),
+        },
         "cost_group_mean": cost_group_mean,
         "mppi_last_cost_terms": {k: float(v) for k, v in mppi.last_cost_terms.items()},
         "spin_stall_events": int(sup_trigger_counts.get("spin_stall", 0)),
@@ -2131,6 +2575,9 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--cost-safe-corridor", type=float, default=120.0)
     parser.add_argument("--cost-safe-bounds", type=float, default=120.0)
     parser.add_argument("--cost-safe-bounds-terminal", type=float, default=260.0)
+    parser.add_argument("--collision-step-clearance", type=float, default=0.10)
+    parser.add_argument("--collision-step-scale", type=float, default=0.08)
+    parser.add_argument("--collision-step-hit-scale", type=float, default=2.5)
     parser.add_argument("--cost-ctrl-effort", type=float, default=0.01)
     parser.add_argument("--cost-ctrl-smooth", type=float, default=0.08)
     parser.add_argument("--cost-ctrl-spin", type=float, default=0.08)
@@ -2159,15 +2606,22 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--near-penalty-mid-scale", type=float, default=0.06)
     parser.add_argument("--near-penalty-hard-scale", type=float, default=0.55)
     parser.add_argument("--near-penalty-hard-power", type=float, default=3.2)
+    parser.add_argument("--near-progress-start", type=float, default=0.75)
+    parser.add_argument("--near-progress-hard", type=float, default=0.55)
+    parser.add_argument("--near-progress-weight", type=float, default=70.0)
+    parser.add_argument("--near-stall-progress-eps", type=float, default=0.015)
+    parser.add_argument("--near-stall-effort-gate", type=float, default=0.45)
     parser.add_argument("--path-corridor-half-width", type=float, default=0.34)
     parser.add_argument("--max-delta-u", type=float, default=0.80)
+    parser.add_argument("--soft-delta-projection", action="store_true", default=True)
+    parser.add_argument("--no-soft-delta-projection", action="store_false", dest="soft_delta_projection")
     parser.add_argument("--action-post-delta-eps", type=float, default=1e-4)
     parser.add_argument("--nominal-forward-only", action="store_true", default=True)
     parser.add_argument("--no-nominal-forward-only", action="store_false", dest="nominal_forward_only")
     parser.add_argument("--nominal-min-forward-speed", type=float, default=0.07)
     parser.add_argument("--nav-min-forward-speed", type=float, default=0.07)
     parser.add_argument("--nav-speed-max", type=float, default=2.0)
-    parser.add_argument("--terminal-min-forward-speed", type=float, default=0.0)
+    parser.add_argument("--terminal-min-forward-speed", type=float, default=0.02)
     parser.add_argument("--terminal-speed-max", type=float, default=0.55)
     parser.add_argument("--speed-cap-clearance-hard", type=float, default=0.10)
     parser.add_argument("--speed-cap-clearance-soft", type=float, default=0.40)
@@ -2197,7 +2651,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--wheel-base", type=float, default=0.37)
     parser.add_argument("--yaw-blend-alpha", type=float, default=0.35)
     parser.add_argument("--control-decimation", type=int, default=10)
-    parser.add_argument("--pose-source", type=str, default="odom", choices=("gt", "odom"))
+    parser.add_argument("--pose-source", type=str, default="gt", choices=("gt", "odom"))
     parser.add_argument("--oracle-mode", action="store_true", help="Use GT pose/obstacles for planning (legacy baseline).")
     parser.add_argument("--sensor-use-depth", action="store_true", default=False)
     parser.add_argument("--no-sensor-use-depth", action="store_false", dest="sensor_use_depth")
@@ -2208,10 +2662,15 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--sensor-default-far", type=float, default=6.0)
     parser.add_argument("--sensor-collision-threshold", type=float, default=0.30)
     parser.add_argument("--sensor-obs-radius", type=float, default=0.12)
+    parser.add_argument("--sensor-use-ray-obstacles", action="store_true", default=False)
+    parser.add_argument("--no-sensor-use-ray-obstacles", action="store_false", dest="sensor_use_ray_obstacles")
+    parser.add_argument("--sensor-ray-footprint-scale", type=float, default=0.90)
+    parser.add_argument("--sensor-ray-radius-max-scale", type=float, default=2.60)
     parser.add_argument("--sensor-obs-max-range", type=float, default=3.0)
     parser.add_argument("--sensor-obs-min-range", type=float, default=0.12)
     parser.add_argument("--sensor-depth-max-points", type=int, default=20)
     parser.add_argument("--sensor-depth-hfov-deg", type=float, default=86.0)
+    parser.add_argument("--sensor-depth-yaw-offset-deg", type=float, default=0.0)
     parser.add_argument("--depth-min-valid", type=float, default=0.10)
     parser.add_argument("--sensor-obs-memory-steps", type=int, default=5)
     parser.add_argument("--sensor-obs-memory-max-points", type=int, default=96)
@@ -2221,18 +2680,25 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--front-guide-min-x", type=float, default=0.02)
     parser.add_argument("--front-guide-hold-steps", type=int, default=3)
     parser.add_argument("--front-guide-max-points", type=int, default=64)
+    parser.add_argument("--guide-use-all-obstacles", action="store_true", default=True)
+    parser.add_argument("--no-guide-use-all-obstacles", action="store_false", dest="guide_use_all_obstacles")
     parser.add_argument("--front-guide-fallback-all", action="store_true", default=True)
     parser.add_argument("--no-front-guide-fallback-all", action="store_false", dest="front_guide_fallback_all")
     parser.add_argument("--guide-obs-radius-scale", type=float, default=1.00)
     parser.add_argument("--guide-obs-radius-min", type=float, default=0.12)
-    parser.add_argument("--sensor-guide-robot-radius", type=float, default=0.20)
-    parser.add_argument("--sensor-guide-inflate-margin", type=float, default=0.02)
+    parser.add_argument("--sensor-guide-robot-radius", type=float, default=0.28)
+    parser.add_argument("--sensor-guide-inflate-margin", type=float, default=0.10)
+    parser.add_argument("--planner-passability-check", action="store_true", default=True)
+    parser.add_argument("--no-planner-passability-check", action="store_false", dest="planner_passability_check")
+    parser.add_argument("--planner-passability-margin", type=float, default=0.02)
+    parser.add_argument("--planner-passability-min-clearance", type=float, default=0.02)
     parser.add_argument("--sensor-goal-los-margin", type=float, default=0.0)
     parser.add_argument("--sensor-waypoint-margin", type=float, default=0.06)
     parser.add_argument("--map-resolution", type=float, default=0.05)
     parser.add_argument("--map-x-range", type=float, nargs=2, default=(-1.0, 4.0))
     parser.add_argument("--map-y-range", type=float, nargs=2, default=(-2.0, 2.0))
     parser.add_argument("--map-occ-threshold", type=float, default=0.35)
+    parser.add_argument("--map-hit-spread-cells", type=int, default=0)
     parser.add_argument("--map-observed-threshold", type=float, default=0.15)
     parser.add_argument("--map-min-cluster-cells", type=int, default=2)
     parser.add_argument("--map-max-obstacles", type=int, default=96)
@@ -2240,6 +2706,10 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--goal-blocked-exit-conf", type=float, default=0.35)
     parser.add_argument("--goal-blocked-enter-steps", type=int, default=3)
     parser.add_argument("--goal-blocked-exit-steps", type=int, default=5)
+    parser.add_argument("--goal-blocked-corridor-len", type=float, default=1.2)
+    parser.add_argument("--goal-blocked-corridor-half-width", type=float, default=0.45)
+    parser.add_argument("--goal-blocked-front-fov-deg", type=float, default=80.0)
+    parser.add_argument("--goal-blocked-front-range", type=float, default=0.9)
     parser.add_argument("--depth-gate-window", type=int, default=20)
     parser.add_argument("--depth-gate-min-valid-ratio", type=float, default=0.015)
     parser.add_argument("--depth-gate-max-sector-delta", type=float, default=0.70)
@@ -2279,10 +2749,30 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-waypoint", action="store_true")
     parser.add_argument("--global-guide", action="store_true", default=True)
     parser.add_argument("--no-global-guide", action="store_false", dest="global_guide")
+    parser.add_argument("--global-planner", type=str, default="hybrid_astar", choices=("hybrid_astar", "astar", "bfs"))
+    parser.add_argument("--hybrid-n-theta", type=int, default=40)
+    parser.add_argument("--hybrid-step-cells", type=float, default=2.8)
+    parser.add_argument("--hybrid-turn-penalty", type=float, default=0.22)
+    parser.add_argument("--hybrid-max-expansions", type=int, default=14000)
     parser.add_argument("--guide-replan-interval", type=int, default=14)
+    parser.add_argument("--guide-fail-latch-steps", type=int, default=20)
+    parser.add_argument("--guide-fail-latch-max-steps", type=int, default=120)
+    parser.add_argument("--guide-fail-backoff-mult-cap", type=int, default=4)
+    parser.add_argument("--guide-fail-retry-min-move", type=float, default=0.12)
+    parser.add_argument("--guide-fail-retry-min-yaw", type=float, default=0.25)
     parser.add_argument("--guide-lookahead", type=float, default=0.9)
     parser.add_argument("--guide-ref-step-m", type=float, default=0.09)
     parser.add_argument("--guide-max-grid-cells", type=int, default=240000)
+    parser.add_argument("--reference-sampling", action="store_true", default=True)
+    parser.add_argument("--no-reference-sampling", action="store_false", dest="reference_sampling")
+    parser.add_argument("--reference-tracker-kp-v", type=float, default=1.20)
+    parser.add_argument("--reference-tracker-kp-w", type=float, default=2.40)
+    parser.add_argument("--reference-nominal-v-max", type=float, default=0.90)
+    parser.add_argument("--reference-nominal-w-max", type=float, default=1.80)
+    parser.add_argument("--reference-tracker-stop-dist", type=float, default=0.04)
+    parser.add_argument("--reference-tracker-forward-only", action="store_true", default=True)
+    parser.add_argument("--no-reference-tracker-forward-only", action="store_false", dest="reference_tracker_forward_only")
+    parser.add_argument("--reference-tracker-min-v", type=float, default=0.03)
     parser.add_argument("--goal-direct-on-clear", action="store_true", default=True)
     parser.add_argument("--no-goal-direct-on-clear", action="store_false", dest="goal_direct_on_clear")
     parser.add_argument("--goal-direct-clear-steps", type=int, default=18)
@@ -2300,6 +2790,13 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--corridor-tight-max-dev", type=float, default=0.32)
     parser.add_argument("--target-jump-max", type=float, default=0.62)
     parser.add_argument("--target-jump-min", type=float, default=0.18)
+    parser.add_argument("--target-passability-guard", action="store_true", default=True)
+    parser.add_argument("--no-target-passability-guard", action="store_false", dest="target_passability_guard")
+    parser.add_argument("--target-guard-min-clearance", type=float, default=0.06)
+    parser.add_argument("--target-guard-margin", type=float, default=0.04)
+    parser.add_argument("--target-guard-min-progress", type=float, default=0.18)
+    parser.add_argument("--target-guard-backtrack-points", type=int, default=16)
+    parser.add_argument("--target-guard-ray-samples", type=int, default=10)
     parser.add_argument("--guide-backtrack-max", type=int, default=0)
     parser.add_argument("--commit-latch-steps", type=int, default=80)
     parser.add_argument("--commit-release-progress", type=float, default=0.35)
@@ -2310,13 +2807,18 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--waypoint-use-los-gating", action="store_true", default=True)
     parser.add_argument("--no-waypoint-use-los-gating", action="store_false", dest="waypoint_use_los_gating")
     parser.add_argument("--waypoint-replan-interval", type=int, default=16)
+    parser.add_argument("--waypoint-replan-on-interval", action="store_true", default=False)
+    parser.add_argument("--waypoint-goal-min-dist", type=float, default=0.20)
+    parser.add_argument("--waypoint-infeasible-min-clearance", type=float, default=0.012)
+    parser.add_argument("--waypoint-infeasible-confirm-steps", type=int, default=3)
+    parser.add_argument("--waypoint-infeasible-force-latch-steps", type=int, default=90)
     parser.add_argument("--waypoint-switch-radius", type=float, default=0.35)
     parser.add_argument("--waypoint-clear-hysteresis-steps", type=int, default=14)
     parser.add_argument("--waypoint-min-hold-steps", type=int, default=20)
     parser.add_argument("--waypoint-margin", type=float, default=0.12)
     parser.add_argument("--goal-los-margin", type=float, default=0.02)
     parser.add_argument("--waypoint-lateral-extra", type=float, default=0.28)
-    parser.add_argument("--waypoint-max-lateral", type=float, default=0.60)
+    parser.add_argument("--waypoint-max-lateral", type=float, default=0.75)
     parser.add_argument("--waypoint-min-forward", type=float, default=0.20)
     parser.add_argument("--waypoint-max-forward", type=float, default=1.20)
     parser.add_argument("--waypoint-stuck-window", type=int, default=40)
