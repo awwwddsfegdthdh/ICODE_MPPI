@@ -69,6 +69,8 @@ def load_icode_checkpoint(ckpt_path: Path, device: torch.device) -> ICODEDynamic
         hidden_dim=int(cfg.get("hidden_dim", 640)),
         num_layers=int(cfg.get("num_layers", 6)),
         dt=float(cfg.get("dt", 0.02)),
+        predict_obs_distance=bool(cfg.get("predict_obs_distance", False)),
+        obs_head_hidden_dim=int(cfg.get("obs_head_hidden_dim", 128)),
     ).to(device)
     model.load_state_dict(ckpt["model_state_dict"], strict=True)
     model.eval()
@@ -88,6 +90,11 @@ class HybridDynamics(torch.nn.Module):
         x_i = self.icode(x, u)
         x_k = self.kin(x, u)
         return self.alpha * x_i + (1.0 - self.alpha) * x_k
+
+    def predict_obstacle_distance(self, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        if hasattr(self.icode, "predict_obstacle_distance"):
+            return self.icode.predict_obstacle_distance(x, u)
+        raise AttributeError("Underlying ICODE model does not expose predict_obstacle_distance().")
 
 
 def _adaptive_profile(mode: str) -> dict:
@@ -149,6 +156,7 @@ def _apply_adaptive_profile(
         "cost_safe_collision",
         "cost_safe_near",
         "cost_safe_corridor",
+        "cost_safe_pred_obs",
         "cost_task_path_track",
         "cost_task_path_progress",
         "cost_ctrl_smooth",
@@ -166,6 +174,8 @@ def _apply_adaptive_profile(
     mppi.w_near_obs = float(mppi.cost_safe_near)
     if hasattr(mppi, "cost_safe_corridor"):
         mppi.w_corridor = float(mppi.cost_safe_corridor)
+    if hasattr(mppi, "cost_safe_pred_obs"):
+        mppi.w_pred_obs = float(mppi.cost_safe_pred_obs)
     mppi.w_path_track = float(mppi.cost_task_path_track)
     mppi.w_path_progress = float(mppi.cost_task_path_progress)
     mppi.w_smooth = float(mppi.cost_ctrl_smooth)
@@ -693,6 +703,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         cost_safe_collision=args.cost_safe_collision,
         cost_safe_near=args.cost_safe_near,
         cost_safe_corridor=args.cost_safe_corridor,
+        cost_safe_pred_obs=args.cost_safe_pred_obs,
         cost_safe_bounds=args.cost_safe_bounds,
         cost_safe_bounds_terminal=args.cost_safe_bounds_terminal,
         collision_step_clearance=args.collision_step_clearance,
@@ -715,6 +726,10 @@ def run_episode(args: argparse.Namespace) -> dict:
         near_penalty_mid_scale=args.near_penalty_mid_scale,
         near_penalty_hard_scale=args.near_penalty_hard_scale,
         near_penalty_hard_power=args.near_penalty_hard_power,
+        pred_obs_clearance=args.pred_obs_clearance,
+        pred_obs_hard_clearance=args.pred_obs_hard_clearance,
+        pred_obs_hard_scale=args.pred_obs_hard_scale,
+        pred_obs_clip_max=args.pred_obs_clip_max,
         near_progress_start=args.near_progress_start,
         near_progress_hard=args.near_progress_hard,
         near_progress_weight=args.near_progress_weight,
@@ -743,6 +758,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         "cost_safe_collision": float(mppi.cost_safe_collision),
         "cost_safe_near": float(mppi.cost_safe_near),
         "cost_safe_corridor": float(getattr(mppi, "cost_safe_corridor", 0.0)),
+        "cost_safe_pred_obs": float(getattr(mppi, "cost_safe_pred_obs", 0.0)),
         "cost_task_path_track": float(mppi.cost_task_path_track),
         "cost_task_path_progress": float(mppi.cost_task_path_progress),
         "cost_ctrl_smooth": float(mppi.cost_ctrl_smooth),
@@ -1248,7 +1264,7 @@ def run_episode(args: argparse.Namespace) -> dict:
     boundary_signed_dist_hist: list[float] = []
     boundary_inward_speed_hist: list[float] = []
     active_target_step_hist: list[np.ndarray] = []
-    cost_group_step_hist = {"task": [], "safety": [], "control": [], "terminal": [], "total": []}
+    cost_group_step_hist = {"task": [], "safety": [], "pred_obs": [], "control": [], "terminal": [], "total": []}
 
     path_remain_hist = []
     goal_progress_hist: deque[float] = deque(maxlen=max(2, int(args.sup_progress_window)))
@@ -1309,13 +1325,15 @@ def run_episode(args: argparse.Namespace) -> dict:
     target_active_hist = [goal_xy.copy()]
     last_active_target_for_supervisor = goal_xy.copy()
     target_switched_recent = False
-    cost_group_hist = {"task": [], "safety": [], "control": [], "terminal": [], "total": []}
+    cost_group_hist = {"task": [], "safety": [], "pred_obs": [], "control": [], "terminal": [], "total": []}
     nominal_reverse_suppressed_steps = 0
     dock_reverse_suppressed_steps = 0
     mppi_reverse_raw_steps = 0
     # Razor principle: keep a single traversability radius/inflation semantics end-to-end.
     guide_robot_radius = float(args.robot_radius)
     guide_inflate_margin = float(args.scene_path_inflate_margin)
+    global_guide_source = str(args.global_guide_source).strip().lower()
+    use_gt_global_guide = bool(global_guide_source == "gt")
     guide_los_margin = float(args.goal_los_margin if args.oracle_mode else args.sensor_goal_los_margin)
     waypoint_margin_eff = float(args.waypoint_margin if args.oracle_mode else args.sensor_waypoint_margin)
 
@@ -1760,18 +1778,38 @@ def run_episode(args: argparse.Namespace) -> dict:
                 if replan_gate:
                     guide_replans += 1
                     plan_debug = {}
+                    guide_obstacles_for_planner = (
+                        obstacles_gt.astype(np.float32)
+                        if use_gt_global_guide
+                        else obstacles_guide.astype(np.float32)
+                    )
+                    guide_occ_grid = (
+                        occ_grid_nav
+                        if ((not args.oracle_mode) and (not use_gt_global_guide))
+                        else None
+                    )
+                    guide_occ_min_xy = (
+                        occ_min_xy_nav
+                        if ((not args.oracle_mode) and (not use_gt_global_guide))
+                        else None
+                    )
+                    guide_occ_res = (
+                        occ_res_nav
+                        if ((not args.oracle_mode) and (not use_gt_global_guide))
+                        else None
+                    )
                     guide_path_candidate = plan_global_path_xy(
                         start_xy=base_xy_now.astype(np.float32),
                         goal_xy=goal_xy.astype(np.float32),
-                        obstacles_xyr=obstacles_guide.astype(np.float32),
+                        obstacles_xyr=guide_obstacles_for_planner,
                         robot_radius=guide_robot_radius,
                         inflation_margin=guide_inflate_margin,
                         grid_resolution=float(args.scene_path_grid_res),
                         grid_padding=float(args.scene_path_grid_padding),
                         max_grid_cells=int(args.guide_max_grid_cells),
-                        occ_grid=occ_grid_nav if (not args.oracle_mode) else None,
-                        occ_min_xy=occ_min_xy_nav if (not args.oracle_mode) else None,
-                        occ_resolution=occ_res_nav if (not args.oracle_mode) else None,
+                        occ_grid=guide_occ_grid,
+                        occ_min_xy=guide_occ_min_xy,
+                        occ_resolution=guide_occ_res,
                         planner=str(args.global_planner),
                         start_yaw=float(state[2]),
                         passability_check=bool(args.planner_passability_check),
@@ -2388,6 +2426,12 @@ def run_episode(args: argparse.Namespace) -> dict:
         "scene_line_blockers_actual": int(line_blockers),
         "obstacle_radii": obstacles_gt[:, 2].astype(float).tolist(),
         "prediction_model": prediction_model,
+        "pred_obs_model_enabled": bool(hasattr(model, "predict_obstacle_distance")),
+        "cost_safe_pred_obs": float(args.cost_safe_pred_obs),
+        "pred_obs_clearance": float(args.pred_obs_clearance),
+        "pred_obs_hard_clearance": float(args.pred_obs_hard_clearance),
+        "pred_obs_hard_scale": float(args.pred_obs_hard_scale),
+        "pred_obs_clip_max": float(args.pred_obs_clip_max),
         "state_convention_version": STATE_CONVENTION_VERSION,
         "drive_sign": float(args.v_forward_sign),
         "oracle_mode": bool(args.oracle_mode),
@@ -2408,6 +2452,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         "waypoint_forced_side": int(waypoint_forced_side),
         "waypoint_last_xy": waypoint_xy.tolist() if waypoint_xy is not None else None,
         "global_guide_enabled": bool(args.global_guide),
+        "global_guide_source": str(args.global_guide_source),
         "global_guide_replans": int(guide_replans),
         "global_guide_active_steps": int(guide_active_steps),
         "global_guide_fail_steps": int(guide_fail_steps),
@@ -2479,6 +2524,7 @@ def run_episode(args: argparse.Namespace) -> dict:
         goal_blocked_conf_step=goal_blocked_conf_arr,
         cost_task_step=cost_group_step_arr["task"],
         cost_safety_step=cost_group_step_arr["safety"],
+        cost_pred_obs_step=cost_group_step_arr["pred_obs"],
         cost_control_step=cost_group_step_arr["control"],
         cost_terminal_step=cost_group_step_arr["terminal"],
         cost_total_step=cost_group_step_arr["total"],
@@ -2573,6 +2619,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--cost-safe-collision", type=float, default=1500.0)
     parser.add_argument("--cost-safe-near", type=float, default=0.6)
     parser.add_argument("--cost-safe-corridor", type=float, default=120.0)
+    parser.add_argument("--cost-safe-pred-obs", type=float, default=80.0)
     parser.add_argument("--cost-safe-bounds", type=float, default=120.0)
     parser.add_argument("--cost-safe-bounds-terminal", type=float, default=260.0)
     parser.add_argument("--collision-step-clearance", type=float, default=0.10)
@@ -2606,6 +2653,10 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--near-penalty-mid-scale", type=float, default=0.06)
     parser.add_argument("--near-penalty-hard-scale", type=float, default=0.55)
     parser.add_argument("--near-penalty-hard-power", type=float, default=3.2)
+    parser.add_argument("--pred-obs-clearance", type=float, default=0.30)
+    parser.add_argument("--pred-obs-hard-clearance", type=float, default=0.18)
+    parser.add_argument("--pred-obs-hard-scale", type=float, default=2.0)
+    parser.add_argument("--pred-obs-clip-max", type=float, default=8.0)
     parser.add_argument("--near-progress-start", type=float, default=0.75)
     parser.add_argument("--near-progress-hard", type=float, default=0.55)
     parser.add_argument("--near-progress-weight", type=float, default=70.0)
@@ -2749,6 +2800,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-waypoint", action="store_true")
     parser.add_argument("--global-guide", action="store_true", default=True)
     parser.add_argument("--no-global-guide", action="store_false", dest="global_guide")
+    parser.add_argument("--global-guide-source", type=str, choices=("sensor", "gt"), default="gt")
     parser.add_argument("--global-planner", type=str, default="hybrid_astar", choices=("hybrid_astar", "astar", "bfs"))
     parser.add_argument("--hybrid-n-theta", type=int, default=40)
     parser.add_argument("--hybrid-step-cells", type=float, default=2.8)

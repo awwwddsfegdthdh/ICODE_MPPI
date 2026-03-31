@@ -17,15 +17,26 @@ from state_convention import assert_meta_contract, read_npz_meta
 
 
 class TransitionDataset(Dataset):
-    def __init__(self, x_t: np.ndarray, u_t: np.ndarray, x_tp1: np.ndarray):
+    def __init__(
+        self,
+        x_t: np.ndarray,
+        u_t: np.ndarray,
+        x_tp1: np.ndarray,
+        obs_dist_tp1: Optional[np.ndarray] = None,
+        obs_dist_valid: Optional[np.ndarray] = None,
+    ):
         self.x_t = torch.from_numpy(x_t.astype(np.float32))
         self.u_t = torch.from_numpy(u_t.astype(np.float32))
         self.x_tp1 = torch.from_numpy(x_tp1.astype(np.float32))
+        self.obs_dist_tp1 = None if obs_dist_tp1 is None else torch.from_numpy(obs_dist_tp1.astype(np.float32))
+        self.obs_dist_valid = None if obs_dist_valid is None else torch.from_numpy(obs_dist_valid.astype(np.uint8))
 
     def __len__(self) -> int:
         return self.x_t.shape[0]
 
     def __getitem__(self, idx: int):
+        if self.obs_dist_tp1 is not None and self.obs_dist_valid is not None:
+            return self.x_t[idx], self.u_t[idx], self.x_tp1[idx], self.obs_dist_tp1[idx], self.obs_dist_valid[idx]
         return self.x_t[idx], self.u_t[idx], self.x_tp1[idx]
 
 
@@ -73,15 +84,27 @@ def evaluate_loader(
     device: torch.device,
     y_std: torch.Tensor,
     amp_dtype,
+    obs_model: Optional[torch.nn.Module] = None,
 ) -> Dict[str, float]:
     model.eval()
     total_mse = 0.0
     total_mae = 0.0
     total_norm_mse = 0.0
     total_n = 0
+    total_obs_mse = 0.0
+    total_obs_mae = 0.0
+    total_obs_n = 0
 
     with torch.no_grad():
-        for x_t, u_t, y_t in loader:
+        for batch in loader:
+            if len(batch) == 5:
+                x_t, u_t, y_t, obs_t, obs_valid = batch
+                obs_t = obs_t.to(device, non_blocking=True)
+                obs_valid = obs_valid.to(device, non_blocking=True)
+            else:
+                x_t, u_t, y_t = batch
+                obs_t = None
+                obs_valid = None
             x_t = x_t.to(device, non_blocking=True)
             u_t = u_t.to(device, non_blocking=True)
             y_t = y_t.to(device, non_blocking=True)
@@ -100,15 +123,33 @@ def evaluate_loader(
             total_mae += float(mae.item())
             total_n += bsz_numel
 
+            if obs_model is not None and hasattr(obs_model, "predict_obstacle_distance") and obs_t is not None and obs_valid is not None:
+                mask = obs_valid > 0
+                if torch.any(mask):
+                    pred_obs = obs_model.predict_obstacle_distance(x_t, u_t)
+                    err = pred_obs[mask] - obs_t[mask]
+                    total_obs_mse += float(torch.sum(err * err).item())
+                    total_obs_mae += float(torch.sum(torch.abs(err)).item())
+                    total_obs_n += int(mask.sum().item())
+
     avg_norm_mse = total_norm_mse / max(total_n, 1)
     avg_mse = total_mse / max(total_n, 1)
-    return {
+    out = {
         "norm_mse": avg_norm_mse,
         "norm_rmse": math.sqrt(avg_norm_mse),
         "mse": avg_mse,
         "rmse": math.sqrt(avg_mse),
         "mae": total_mae / max(total_n, 1),
     }
+    if total_obs_n > 0:
+        out["obs_dist_rmse"] = math.sqrt(total_obs_mse / total_obs_n)
+        out["obs_dist_mae"] = total_obs_mae / total_obs_n
+        out["obs_dist_n"] = float(total_obs_n)
+    else:
+        out["obs_dist_rmse"] = float("nan")
+        out["obs_dist_mae"] = float("nan")
+        out["obs_dist_n"] = 0.0
+    return out
 
 
 def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -153,6 +194,18 @@ def evaluate_against_groundtruth(
     rollout_horizon: int,
     amp_dtype,
 ) -> Dict[str, float]:
+    if len(eval_paths) == 0:
+        return {
+            "one_step_label_rmse": float("nan"),
+            "one_step_gt_xy_rmse": float("nan"),
+            "one_step_gt_xy_mae": float("nan"),
+            "one_step_gt_wz_rmse": float("nan"),
+            "one_step_gt_wz_mae": float("nan"),
+            "rollout_ade": float("nan"),
+            "rollout_fde": float("nan"),
+            "rollout_episodes": 0,
+        }
+
     x_list, u_list, y_list, gt_xy_list, gt_wz_list = [], [], [], [], []
     for p in eval_paths:
         x_t, u_t, x_tp1, gt_xy_tp1, gt_wz_tp1, _ = load_gt_transition_eval(p)
@@ -363,8 +416,15 @@ def load_checkpoint_if_requested(
         return 1, float("inf"), None
 
     ckpt = torch.load(ckpt_path, map_location=device)
+    allow_aux_mismatch = bool(getattr(raw_model, "predict_obs_distance_enabled", False))
     try:
-        raw_model.load_state_dict(ckpt["model_state_dict"], strict=True)
+        load_res = raw_model.load_state_dict(ckpt["model_state_dict"], strict=(not allow_aux_mismatch))
+        if allow_aux_mismatch and hasattr(load_res, "missing_keys"):
+            if load_res.missing_keys or load_res.unexpected_keys:
+                print(
+                    "Resume with non-strict loading due to auxiliary obstacle-distance head. "
+                    f"missing={list(load_res.missing_keys)} unexpected={list(load_res.unexpected_keys)}"
+                )
     except RuntimeError as exc:
         print(f"Resume skipped due to checkpoint/model mismatch: {exc}")
         return 1, float("inf"), None
@@ -420,9 +480,45 @@ def train(args: argparse.Namespace) -> None:
     bundle = np.load(args.bundle, allow_pickle=True)
     bundle_meta = read_npz_meta(bundle)
     assert_meta_contract(bundle_meta)
-    train_ds = TransitionDataset(bundle["train__x_t"], bundle["train__u_t"], bundle["train__x_tp1"])
-    val_ds = TransitionDataset(bundle["val__x_t"], bundle["val__u_t"], bundle["val__x_tp1"])
-    test_ds = TransitionDataset(bundle["test__x_t"], bundle["test__u_t"], bundle["test__x_tp1"])
+    has_obs_dist_labels = all(
+        k in bundle.files
+        for k in (
+            "train__obs_dist_tp1",
+            "train__obs_dist_valid",
+            "val__obs_dist_tp1",
+            "val__obs_dist_valid",
+            "test__obs_dist_tp1",
+            "test__obs_dist_valid",
+        )
+    )
+    predict_obs_distance_active = bool(args.predict_obs_distance and has_obs_dist_labels)
+    if args.predict_obs_distance and (not has_obs_dist_labels):
+        print(
+            "Obstacle-distance prediction requested but bundle has no obs distance labels. "
+            "Fallback to dynamics-only training."
+        )
+
+    train_ds = TransitionDataset(
+        bundle["train__x_t"],
+        bundle["train__u_t"],
+        bundle["train__x_tp1"],
+        obs_dist_tp1=(bundle["train__obs_dist_tp1"] if predict_obs_distance_active else None),
+        obs_dist_valid=(bundle["train__obs_dist_valid"] if predict_obs_distance_active else None),
+    )
+    val_ds = TransitionDataset(
+        bundle["val__x_t"],
+        bundle["val__u_t"],
+        bundle["val__x_tp1"],
+        obs_dist_tp1=(bundle["val__obs_dist_tp1"] if predict_obs_distance_active else None),
+        obs_dist_valid=(bundle["val__obs_dist_valid"] if predict_obs_distance_active else None),
+    )
+    test_ds = TransitionDataset(
+        bundle["test__x_t"],
+        bundle["test__u_t"],
+        bundle["test__x_tp1"],
+        obs_dist_tp1=(bundle["test__obs_dist_tp1"] if predict_obs_distance_active else None),
+        obs_dist_valid=(bundle["test__obs_dist_valid"] if predict_obs_distance_active else None),
+    )
 
     device = pick_device(args.device)
     amp_dtype = pick_amp_dtype(args.amp)
@@ -495,6 +591,8 @@ def train(args: argparse.Namespace) -> None:
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         dt=args.dt,
+        predict_obs_distance=predict_obs_distance_active,
+        obs_head_hidden_dim=args.obs_head_hidden_dim,
     ).to(device)
 
     model = raw_model
@@ -552,8 +650,10 @@ def train(args: argparse.Namespace) -> None:
         "epoch": [],
         "train_norm_mse": [],
         "train_rollout_mse": [],
+        "train_obs_dist_loss": [],
         "val_norm_mse": [],
         "val_rmse": [],
+        "val_obs_dist_rmse": [],
         "train_time_s": [],
         "samples_per_s": [],
         "lr": [],
@@ -576,6 +676,8 @@ def train(args: argparse.Namespace) -> None:
                 "hidden_dim": args.hidden_dim,
                 "num_layers": args.num_layers,
                 "dt": args.dt,
+                "predict_obs_distance": bool(predict_obs_distance_active),
+                "obs_head_hidden_dim": int(args.obs_head_hidden_dim),
                 "state_convention_version": str(bundle_meta["meta__state_convention_version"].reshape(-1)[0]),
                 "drive_sign": float(bundle_meta["meta__drive_sign"].reshape(-1)[0]),
                 "pose_source": str(bundle_meta["meta__pose_source"].reshape(-1)[0]),
@@ -602,9 +704,19 @@ def train(args: argparse.Namespace) -> None:
         model.train()
         total_one_step_loss_sum = 0.0
         total_rollout_loss_sum = 0.0
+        total_obs_loss_sum = 0.0
+        total_obs_count = 0
         total_samples = 0
 
-        for x_t, u_t, y_t in train_loader:
+        for batch in train_loader:
+            if len(batch) == 5:
+                x_t, u_t, y_t, obs_t, obs_valid = batch
+                obs_t = obs_t.to(device, non_blocking=True)
+                obs_valid = obs_valid.to(device, non_blocking=True)
+            else:
+                x_t, u_t, y_t = batch
+                obs_t = None
+                obs_valid = None
             x_t = x_t.to(device, non_blocking=True)
             u_t = u_t.to(device, non_blocking=True)
             y_t = y_t.to(device, non_blocking=True)
@@ -629,7 +741,20 @@ def train(args: argparse.Namespace) -> None:
                         terminal_weight=args.rollout_terminal_weight,
                     )
 
-                loss = one_step_loss + args.rollout_loss_weight * rollout_loss
+                obs_dist_loss = torch.tensor(0.0, device=device)
+                obs_count = 0
+                if predict_obs_distance_active and obs_t is not None and obs_valid is not None:
+                    mask = obs_valid > 0
+                    if torch.any(mask):
+                        pred_obs = raw_model.predict_obstacle_distance(x_t, u_t)
+                        obs_dist_loss = F.smooth_l1_loss(pred_obs[mask], obs_t[mask])
+                        obs_count = int(mask.sum().item())
+
+                loss = (
+                    one_step_loss
+                    + args.rollout_loss_weight * rollout_loss
+                    + args.obs_dist_loss_weight * obs_dist_loss
+                )
 
             if scaler.is_enabled():
                 scaler.scale(loss).backward()
@@ -653,6 +778,9 @@ def train(args: argparse.Namespace) -> None:
             bsz = x_t.shape[0]
             total_one_step_loss_sum += float(one_step_loss.item()) * bsz
             total_rollout_loss_sum += float(rollout_loss.item()) * bsz
+            if obs_count > 0:
+                total_obs_loss_sum += float(obs_dist_loss.item()) * obs_count
+                total_obs_count += obs_count
             total_samples += bsz
 
         if scheduler is not None and not scheduler_step_per_batch:
@@ -660,8 +788,17 @@ def train(args: argparse.Namespace) -> None:
 
         train_norm_mse = total_one_step_loss_sum / max(total_samples, 1)
         train_rollout_mse = total_rollout_loss_sum / max(total_samples, 1)
+        train_obs_dist_loss = total_obs_loss_sum / max(total_obs_count, 1)
         eval_model = ema_model if (ema_model is not None and args.ema_eval) else model
-        val_metrics = evaluate_loader(eval_model, val_loader, device, y_std=y_std, amp_dtype=amp_dtype)
+        eval_obs_model = ema_model if (ema_model is not None and args.ema_eval) else raw_model
+        val_metrics = evaluate_loader(
+            eval_model,
+            val_loader,
+            device,
+            y_std=y_std,
+            amp_dtype=amp_dtype,
+            obs_model=(eval_obs_model if predict_obs_distance_active else None),
+        )
 
         epoch_time = time.time() - epoch_t0
         cur_lr = float(optimizer.param_groups[0]["lr"])
@@ -669,8 +806,10 @@ def train(args: argparse.Namespace) -> None:
         history["epoch"].append(epoch)
         history["train_norm_mse"].append(train_norm_mse)
         history["train_rollout_mse"].append(train_rollout_mse)
+        history["train_obs_dist_loss"].append(train_obs_dist_loss)
         history["val_norm_mse"].append(val_metrics["norm_mse"])
         history["val_rmse"].append(val_metrics["rmse"])
+        history["val_obs_dist_rmse"].append(float(val_metrics.get("obs_dist_rmse", float("nan"))))
         history["train_time_s"].append(epoch_time)
         history["samples_per_s"].append(total_samples / max(epoch_time, 1e-6))
         history["lr"].append(cur_lr)
@@ -679,7 +818,9 @@ def train(args: argparse.Namespace) -> None:
             print(
                 f"Epoch {epoch:04d} | train_norm_mse={train_norm_mse:.6f} "
                 f"| train_rollout_mse={train_rollout_mse:.6f} "
+                f"| train_obs={train_obs_dist_loss:.6f} "
                 f"| val_norm_mse={val_metrics['norm_mse']:.6f} | val_rmse={val_metrics['rmse']:.6f} "
+                f"| val_obs_rmse={val_metrics.get('obs_dist_rmse', float('nan')):.6f} "
                 f"| samples/s={history['samples_per_s'][-1]:.1f} | lr={cur_lr:.2e}"
             )
 
@@ -710,7 +851,15 @@ def train(args: argparse.Namespace) -> None:
             ema_model.load_state_dict(ckpt["ema_state_dict"])
 
     eval_model = ema_model if (ema_model is not None and args.ema_eval) else model
-    test_metrics = evaluate_loader(eval_model, test_loader, device, y_std=y_std, amp_dtype=amp_dtype)
+    eval_obs_model = ema_model if (ema_model is not None and args.ema_eval) else raw_model
+    test_metrics = evaluate_loader(
+        eval_model,
+        test_loader,
+        device,
+        y_std=y_std,
+        amp_dtype=amp_dtype,
+        obs_model=(eval_obs_model if predict_obs_distance_active else None),
+    )
 
     gt_eval_paths = [Path(p) for p in args.gt_eval_inputs]
     gt_metrics = evaluate_against_groundtruth(
@@ -736,6 +885,8 @@ def train(args: argparse.Namespace) -> None:
         "rollout_steps": args.rollout_steps,
         "rollout_late_bias": args.rollout_late_bias,
         "rollout_terminal_weight": args.rollout_terminal_weight,
+        "predict_obs_distance": bool(predict_obs_distance_active),
+        "obs_dist_loss_weight": float(args.obs_dist_loss_weight),
         "ema_decay": args.ema_decay,
         "ema_eval": args.ema_eval,
         "best_val_norm_mse": best_val_norm_mse,
@@ -757,8 +908,10 @@ def train(args: argparse.Namespace) -> None:
         epoch=np.array(history["epoch"], dtype=np.int32),
         train_norm_mse=np.array(history["train_norm_mse"], dtype=np.float32),
         train_rollout_mse=np.array(history["train_rollout_mse"], dtype=np.float32),
+        train_obs_dist_loss=np.array(history["train_obs_dist_loss"], dtype=np.float32),
         val_norm_mse=np.array(history["val_norm_mse"], dtype=np.float32),
         val_rmse=np.array(history["val_rmse"], dtype=np.float32),
+        val_obs_dist_rmse=np.array(history["val_obs_dist_rmse"], dtype=np.float32),
         train_time_s=np.array(history["train_time_s"], dtype=np.float32),
         samples_per_s=np.array(history["samples_per_s"], dtype=np.float32),
         lr=np.array(history["lr"], dtype=np.float32),
@@ -781,22 +934,14 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gt-eval-inputs",
         type=Path,
-        nargs="+",
-        default=[
-            Path("/home/wmh/ICODE/domo/ICODE_MPPI/datasets/e1_train_converted_60k.npz"),
-            Path("/home/wmh/ICODE/domo/ICODE_MPPI/datasets/e1_train_converted_240k.npz"),
-            Path("/home/wmh/ICODE/domo/ICODE_MPPI/datasets/e1_depth_converted_5k.npz"),
-        ],
+        nargs="*",
+        default=[],
     )
     parser.add_argument(
         "--rollout-train-inputs",
         type=Path,
-        nargs="+",
-        default=[
-            Path("/home/wmh/ICODE/domo/ICODE_MPPI/datasets/e1_train_converted_60k.npz"),
-            Path("/home/wmh/ICODE/domo/ICODE_MPPI/datasets/e1_train_converted_240k.npz"),
-            Path("/home/wmh/ICODE/domo/ICODE_MPPI/datasets/e1_depth_converted_5k.npz"),
-        ],
+        nargs="*",
+        default=[],
     )
 
     parser.add_argument("--save-dir", type=Path, default=Path("/home/wmh/ICODE/domo/ICODE_MPPI/runs/icode_e1_opt"))
@@ -822,6 +967,11 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--state-dim", type=int, default=7)
     parser.add_argument("--action-dim", type=int, default=2)
     parser.add_argument("--dt", type=float, default=0.02)
+    parser.add_argument("--predict-obs-distance", dest="predict_obs_distance", action="store_true")
+    parser.add_argument("--no-predict-obs-distance", dest="predict_obs_distance", action="store_false")
+    parser.set_defaults(predict_obs_distance=True)
+    parser.add_argument("--obs-head-hidden-dim", type=int, default=128)
+    parser.add_argument("--obs-dist-loss-weight", type=float, default=0.20)
     parser.add_argument("--grad-clip", type=float, default=5.0)
 
     parser.add_argument("--rollout-loss-weight", type=float, default=0.15)

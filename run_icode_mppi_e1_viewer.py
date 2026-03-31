@@ -114,6 +114,7 @@ def _apply_adaptive_profile(
         "cost_safe_collision",
         "cost_safe_near",
         "cost_safe_corridor",
+        "cost_safe_pred_obs",
         "cost_task_path_track",
         "cost_task_path_progress",
         "cost_ctrl_smooth",
@@ -130,6 +131,8 @@ def _apply_adaptive_profile(
     mppi.w_near_obs = float(mppi.cost_safe_near)
     if hasattr(mppi, "cost_safe_corridor"):
         mppi.w_corridor = float(mppi.cost_safe_corridor)
+    if hasattr(mppi, "cost_safe_pred_obs"):
+        mppi.w_pred_obs = float(mppi.cost_safe_pred_obs)
     mppi.w_path_track = float(mppi.cost_task_path_track)
     mppi.w_path_progress = float(mppi.cost_task_path_progress)
     mppi.w_smooth = float(mppi.cost_ctrl_smooth)
@@ -312,6 +315,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--cost-safe-collision", type=float, default=1500.0)
     parser.add_argument("--cost-safe-near", type=float, default=0.6)
     parser.add_argument("--cost-safe-corridor", type=float, default=120.0)
+    parser.add_argument("--cost-safe-pred-obs", type=float, default=80.0)
     parser.add_argument("--cost-safe-bounds", type=float, default=120.0)
     parser.add_argument("--cost-safe-bounds-terminal", type=float, default=260.0)
     parser.add_argument("--collision-step-clearance", type=float, default=0.10)
@@ -345,6 +349,10 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--near-penalty-mid-scale", type=float, default=0.06)
     parser.add_argument("--near-penalty-hard-scale", type=float, default=0.55)
     parser.add_argument("--near-penalty-hard-power", type=float, default=3.2)
+    parser.add_argument("--pred-obs-clearance", type=float, default=0.30)
+    parser.add_argument("--pred-obs-hard-clearance", type=float, default=0.18)
+    parser.add_argument("--pred-obs-hard-scale", type=float, default=2.0)
+    parser.add_argument("--pred-obs-clip-max", type=float, default=8.0)
     parser.add_argument("--near-progress-start", type=float, default=0.75)
     parser.add_argument("--near-progress-hard", type=float, default=0.55)
     parser.add_argument("--near-progress-weight", type=float, default=70.0)
@@ -490,6 +498,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-waypoint", action="store_true")
     parser.add_argument("--global-guide", action="store_true", default=True)
     parser.add_argument("--no-global-guide", action="store_false", dest="global_guide")
+    parser.add_argument("--global-guide-source", type=str, choices=("sensor", "gt"), default="gt")
     parser.add_argument("--global-planner", type=str, default="hybrid_astar", choices=("hybrid_astar", "astar", "bfs"))
     parser.add_argument("--hybrid-n-theta", type=int, default=40)
     parser.add_argument("--hybrid-step-cells", type=float, default=2.8)
@@ -686,6 +695,7 @@ def main() -> None:
         cost_safe_collision=args.cost_safe_collision,
         cost_safe_near=args.cost_safe_near,
         cost_safe_corridor=args.cost_safe_corridor,
+        cost_safe_pred_obs=args.cost_safe_pred_obs,
         cost_safe_bounds=args.cost_safe_bounds,
         cost_safe_bounds_terminal=args.cost_safe_bounds_terminal,
         collision_step_clearance=args.collision_step_clearance,
@@ -708,6 +718,10 @@ def main() -> None:
         near_penalty_mid_scale=args.near_penalty_mid_scale,
         near_penalty_hard_scale=args.near_penalty_hard_scale,
         near_penalty_hard_power=args.near_penalty_hard_power,
+        pred_obs_clearance=args.pred_obs_clearance,
+        pred_obs_hard_clearance=args.pred_obs_hard_clearance,
+        pred_obs_hard_scale=args.pred_obs_hard_scale,
+        pred_obs_clip_max=args.pred_obs_clip_max,
         near_progress_start=args.near_progress_start,
         near_progress_hard=args.near_progress_hard,
         near_progress_weight=args.near_progress_weight,
@@ -736,6 +750,7 @@ def main() -> None:
         "cost_safe_collision": float(mppi.cost_safe_collision),
         "cost_safe_near": float(mppi.cost_safe_near),
         "cost_safe_corridor": float(getattr(mppi, "cost_safe_corridor", 0.0)),
+        "cost_safe_pred_obs": float(getattr(mppi, "cost_safe_pred_obs", 0.0)),
         "cost_task_path_track": float(mppi.cost_task_path_track),
         "cost_task_path_progress": float(mppi.cost_task_path_progress),
         "cost_ctrl_smooth": float(mppi.cost_ctrl_smooth),
@@ -1039,7 +1054,8 @@ def main() -> None:
     print(
         f"random_obstacles={args.random_obstacles}, scene_success={random_scene_success}, "
         f"scene_stage={scene_sampling_stage}, line_blockers={line_blockers}, "
-        f"global_guide={args.global_guide}, auto_waypoint={args.auto_waypoint}, "
+        f"global_guide={args.global_guide}, guide_source={args.global_guide_source}, "
+        f"auto_waypoint={args.auto_waypoint}, "
         f"adaptive={args.adaptive_scheduler}"
     )
     print(
@@ -1296,6 +1312,8 @@ def main() -> None:
     # Razor principle: keep a single traversability radius/inflation semantics end-to-end.
     guide_robot_radius = float(args.robot_radius)
     guide_inflate_margin = float(args.scene_path_inflate_margin)
+    global_guide_source = str(args.global_guide_source).strip().lower()
+    use_gt_global_guide = bool(global_guide_source == "gt")
     guide_los_margin = float(args.goal_los_margin if args.oracle_mode else args.sensor_goal_los_margin)
     waypoint_margin_eff = float(args.waypoint_margin if args.oracle_mode else args.sensor_waypoint_margin)
     chain_trigger_counts: dict[str, int] = {}
@@ -1317,7 +1335,7 @@ def main() -> None:
     chain_boundary_mode_hist: list[str] = []
     chain_boundary_signed_dist_hist: list[float] = []
     chain_boundary_inward_speed_hist: list[float] = []
-    chain_cost_group_hist = {"task": [], "safety": [], "control": [], "terminal": [], "total": []}
+    chain_cost_group_hist = {"task": [], "safety": [], "pred_obs": [], "control": [], "terminal": [], "total": []}
     chain_guide_bfs_replan_success = 0
     chain_guide_bfs_replan_fail = 0
     chain_guide_bfs_reachable_steps = 0
@@ -1792,18 +1810,38 @@ def main() -> None:
                         chain_guide_replanned = True
                         guide_replans += 1
                         plan_debug = {}
+                        guide_obstacles_for_planner = (
+                            obstacles_gt.astype(np.float32)
+                            if use_gt_global_guide
+                            else obstacles_guide.astype(np.float32)
+                        )
+                        guide_occ_grid = (
+                            occ_grid_nav
+                            if ((not args.oracle_mode) and (not use_gt_global_guide))
+                            else None
+                        )
+                        guide_occ_min_xy = (
+                            occ_min_xy_nav
+                            if ((not args.oracle_mode) and (not use_gt_global_guide))
+                            else None
+                        )
+                        guide_occ_res = (
+                            occ_res_nav
+                            if ((not args.oracle_mode) and (not use_gt_global_guide))
+                            else None
+                        )
                         guide_path_candidate = plan_global_path_xy(
                             start_xy=base_xy_now.astype(np.float32),
                             goal_xy=goal_xy.astype(np.float32),
-                            obstacles_xyr=obstacles_guide.astype(np.float32),
+                            obstacles_xyr=guide_obstacles_for_planner,
                             robot_radius=guide_robot_radius,
                             inflation_margin=guide_inflate_margin,
                             grid_resolution=float(args.scene_path_grid_res),
                             grid_padding=float(args.scene_path_grid_padding),
                             max_grid_cells=int(args.guide_max_grid_cells),
-                            occ_grid=occ_grid_nav if (not args.oracle_mode) else None,
-                            occ_min_xy=occ_min_xy_nav if (not args.oracle_mode) else None,
-                            occ_resolution=occ_res_nav if (not args.oracle_mode) else None,
+                            occ_grid=guide_occ_grid,
+                            occ_min_xy=guide_occ_min_xy,
+                            occ_resolution=guide_occ_res,
                             planner=str(args.global_planner),
                             start_yaw=float(state[2]),
                             passability_check=bool(args.planner_passability_check),

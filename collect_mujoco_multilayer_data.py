@@ -23,20 +23,46 @@ DEFAULT_XML = (
     / "simulation"
     / "models"
     / "mjcf"
-    / "E1_SimpleSensor_5obs.xml"
+    / "E1_SimpleSensor.xml"
 )
 
 CAMERA_NAME = "front_depth_cam"
 GOAL_BODY_NAME = "goal_marker"
-OBSTACLE_BODY_NAMES = ("obs_front", "obs_left", "obs_right", "obs_extra1", "obs_extra2")
-OBSTACLE_GEOM_NAMES = ("obs_front_geom", "obs_left_geom", "obs_right_geom", "obs_extra1_geom", "obs_extra2_geom")
-OBSTACLE_SITE_NAMES = ("obs_front_site", "obs_left_site", "obs_right_site", "obs_extra1_site", "obs_extra2_site")
+OBSTACLE_BODY_NAMES = (
+    "obs_front",
+    "obs_left",
+    "obs_right",
+    "obs_extra1",
+    "obs_extra2",
+    "obs_mid_left",
+    "obs_mid_right",
+)
+OBSTACLE_GEOM_NAMES = (
+    "obs_front_geom",
+    "obs_left_geom",
+    "obs_right_geom",
+    "obs_extra1_geom",
+    "obs_extra2_geom",
+    "obs_mid_left_geom",
+    "obs_mid_right_geom",
+)
+OBSTACLE_SITE_NAMES = (
+    "obs_front_site",
+    "obs_left_site",
+    "obs_right_site",
+    "obs_extra1_site",
+    "obs_extra2_site",
+    "obs_mid_left_site",
+    "obs_mid_right_site",
+)
 OBSTACLE_GT_SENSOR_NAMES = (
     "obs_front_pos_gt",
     "obs_left_pos_gt",
     "obs_right_pos_gt",
     "obs_extra1_pos_gt",
     "obs_extra2_pos_gt",
+    "obs_mid_left_pos_gt",
+    "obs_mid_right_pos_gt",
 )
 
 RAW_SENSOR_NAMES = [

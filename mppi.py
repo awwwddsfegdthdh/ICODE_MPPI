@@ -76,6 +76,7 @@ class MPPIController:
         cost_safe_collision: float = 1500.0,
         cost_safe_near: float = 1.2,
         cost_safe_corridor: float = 220.0,
+        cost_safe_pred_obs: float = 80.0,
         cost_safe_bounds: float = 0.0,
         cost_safe_bounds_terminal: float = 0.0,
         collision_step_clearance: float = 0.10,
@@ -98,6 +99,10 @@ class MPPIController:
         near_penalty_mid_scale: float = 0.35,
         near_penalty_hard_scale: float = 1.20,
         near_penalty_hard_power: float = 3.0,
+        pred_obs_clearance: float = 0.30,
+        pred_obs_hard_clearance: float = 0.18,
+        pred_obs_hard_scale: float = 2.0,
+        pred_obs_clip_max: float = 8.0,
         near_progress_start: float = 0.75,
         near_progress_hard: float = 0.55,
         near_progress_weight: float = 70.0,
@@ -167,6 +172,7 @@ class MPPIController:
         self.cost_safe_collision = float(max(0.0, cost_safe_collision))
         self.cost_safe_near = float(max(0.0, cost_safe_near))
         self.cost_safe_corridor = float(max(0.0, cost_safe_corridor))
+        self.cost_safe_pred_obs = float(max(0.0, cost_safe_pred_obs))
         self.cost_safe_bounds = float(max(0.0, cost_safe_bounds))
         self.cost_safe_bounds_terminal = float(max(0.0, cost_safe_bounds_terminal))
         self.collision_step_clearance = float(max(0.0, collision_step_clearance))
@@ -196,6 +202,7 @@ class MPPIController:
         self.w_collision = self.cost_safe_collision
         self.w_near_obs = self.cost_safe_near
         self.w_corridor = self.cost_safe_corridor
+        self.w_pred_obs = self.cost_safe_pred_obs
         self.w_bounds = self.cost_safe_bounds
         self.w_bounds_terminal = self.cost_safe_bounds_terminal
         self.w_control = self.cost_ctrl_effort
@@ -225,6 +232,10 @@ class MPPIController:
         self.near_penalty_mid_scale = float(max(0.0, near_penalty_mid_scale))
         self.near_penalty_hard_scale = float(max(0.0, near_penalty_hard_scale))
         self.near_penalty_hard_power = float(max(1.0, near_penalty_hard_power))
+        self.pred_obs_clearance = float(max(1e-3, pred_obs_clearance))
+        self.pred_obs_hard_clearance = float(max(1e-3, min(self.pred_obs_clearance, pred_obs_hard_clearance)))
+        self.pred_obs_hard_scale = float(max(0.0, pred_obs_hard_scale))
+        self.pred_obs_clip_max = float(max(self.pred_obs_clearance, pred_obs_clip_max))
         self.near_progress_start = float(max(1e-3, near_progress_start))
         self.near_progress_hard = float(max(1e-3, min(self.near_progress_start - 1e-3, near_progress_hard)))
         self.near_progress_weight = float(max(0.0, near_progress_weight))
@@ -255,6 +266,7 @@ class MPPIController:
         self.last_cost_terms: Dict[str, float] = {
             "task": 0.0,
             "safety": 0.0,
+            "pred_obs": 0.0,
             "control": 0.0,
             "terminal": 0.0,
             "total": 0.0,
@@ -288,6 +300,7 @@ class MPPIController:
         init_dist: torch.Tensor,
         init_pos_xy: torch.Tensor,
         reference_traj: Optional[torch.Tensor] = None,
+        pred_obs_dist: Optional[torch.Tensor] = None,
         return_terms: bool = False,
     ) -> torch.Tensor | Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         # states: [K, T, D], actions: [K, T, U], target_xy: [2], obstacles: [N, 3]
@@ -297,6 +310,7 @@ class MPPIController:
         final_dist = dist_goal[:, -1]
         cost_task = torch.zeros(n_rollouts, dtype=states.dtype, device=states.device)
         cost_safety = torch.zeros_like(cost_task)
+        cost_pred_obs = torch.zeros_like(cost_task)
         cost_control = torch.zeros_like(cost_task)
         cost_terminal = torch.zeros_like(cost_task)
 
@@ -520,6 +534,18 @@ class MPPIController:
             if self.cost_safe_bounds_terminal > 0.0:
                 cost_safety = cost_safety + self.cost_safe_bounds_terminal * (vbound[:, -1] * vbound[:, -1])
 
+        if pred_obs_dist is not None and self.cost_safe_pred_obs > 0.0:
+            d_pred = torch.clamp(pred_obs_dist, min=0.0, max=self.pred_obs_clip_max)
+            clear = max(self.pred_obs_clearance, 1e-6)
+            hard_clear = max(min(self.pred_obs_hard_clearance, clear), 1e-6)
+            mid_pen = torch.relu(clear - d_pred) / clear
+            mid_pen = mid_pen * mid_pen
+            hard_pen = torch.relu(hard_clear - d_pred) / hard_clear
+            hard_pen = hard_pen * hard_pen
+            pred_pen = mid_pen + self.pred_obs_hard_scale * hard_pen
+            cost_pred_obs = self.cost_safe_pred_obs * torch.sum(pred_pen, dim=1)
+            cost_safety = cost_safety + cost_pred_obs
+
         total_cost = cost_task + cost_safety + cost_control + cost_terminal
         if return_terms:
             terms = {
@@ -529,17 +555,31 @@ class MPPIController:
                 "terminal": cost_terminal,
                 "total": total_cost,
             }
+            if pred_obs_dist is not None and self.cost_safe_pred_obs > 0.0:
+                terms["pred_obs"] = cost_pred_obs
             return total_cost, terms
         return total_cost
 
-    def rollout(self, init_state: torch.Tensor, u_samples: torch.Tensor) -> torch.Tensor:
+    def rollout(self, init_state: torch.Tensor, u_samples: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         states = torch.zeros(self.K, self.T, self.model.state_dim, dtype=torch.float32, device=self.device)
+        can_predict_obs = hasattr(self.model, "predict_obstacle_distance")
+        pred_obs: Optional[torch.Tensor]
+        if can_predict_obs:
+            pred_obs = torch.zeros(self.K, self.T, dtype=torch.float32, device=self.device)
+        else:
+            pred_obs = None
         x = init_state
         with torch.no_grad():
             for t in range(self.T):
+                if pred_obs is not None:
+                    try:
+                        d_pred = self.model.predict_obstacle_distance(x, u_samples[:, t, :]).to(torch.float32)
+                        pred_obs[:, t] = torch.clamp(d_pred, min=0.0, max=self.pred_obs_clip_max)
+                    except Exception:
+                        pred_obs = None
                 x = self.model(x, u_samples[:, t, :])
                 states[:, t, :] = x
-        return states
+        return states, pred_obs
 
     def get_action(
         self,
@@ -598,7 +638,7 @@ class MPPIController:
         u_samples = self._project_forward_only_controls(u_samples)
         u_samples = torch.max(torch.min(u_samples, self.action_high.view(1, 1, -1)), self.action_low.view(1, 1, -1))
 
-        states = self.rollout(state, u_samples)
+        states, pred_obs = self.rollout(state, u_samples)
         costs, terms = self.compute_cost(
             states=states,
             actions=u_samples,
@@ -607,11 +647,13 @@ class MPPIController:
             init_dist=init_dist,
             init_pos_xy=init_pos_xy,
             reference_traj=ref_t,
+            pred_obs_dist=pred_obs,
             return_terms=True,
         )
         self.last_cost_terms = {
             "task": float(torch.mean(terms["task"]).item()),
             "safety": float(torch.mean(terms["safety"]).item()),
+            "pred_obs": float(torch.mean(terms["pred_obs"]).item()) if "pred_obs" in terms else 0.0,
             "control": float(torch.mean(terms["control"]).item()),
             "terminal": float(torch.mean(terms["terminal"]).item()),
             "total": float(torch.mean(terms["total"]).item()),

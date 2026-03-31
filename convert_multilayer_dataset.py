@@ -214,6 +214,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
     free_corridor_width = np.clip(depth_sector_min[:, 0] + depth_sector_min[:, 2], 0.0, 2.0 * args.default_far)
     depth_collision_flag = (np.min(depth_sector_min, axis=1) < args.collision_threshold).astype(np.float32)
     touch_flag = (touch_force > args.touch_force_threshold).astype(np.float32)
+    obs_dist_min = np.min(depth_sector_min, axis=1).astype(np.float32)
 
     state_est = np.stack([x_odom, y_odom, psi_odom, v_body, wz_body, dq_l, dq_r], axis=1).astype(np.float32)
 
@@ -285,6 +286,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
             ],
             dtype=object,
         ),
+        "meta__icode_aux_fields": np.array(["obs_dist_min_next"], dtype=object),
         # raw layer
         "raw__episode": raw_episode,
         "raw__step": raw_step,
@@ -316,6 +318,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
         # ICODE/MPPI ready tensors
         "icode__x_t": icode_x_t,
         "icode__u_t": icode_u_t,
+        "icode__obs_dist_t": obs_dist_min.astype(np.float32),
         "mppi__state_t": mppi_state_t,
         "mppi__u_t": mppi_u_t,
         "mppi__u_prev": mppi_u_prev,
@@ -340,12 +343,13 @@ def convert_dataset(args: argparse.Namespace) -> None:
     if "gt__obs_right_pos_gt" in src.files:
         save_dict["gt__obs_right_pos_gt"] = src["gt__obs_right_pos_gt"].astype(np.float32)
 
-    if "raw__depth_image" in src.files:
-        save_dict["raw__depth_image"] = src["raw__depth_image"]
-    if "raw__distance_image" in src.files:
-        save_dict["raw__distance_image"] = src["raw__distance_image"]
-    if "raw__depth_valid_mask" in src.files:
-        save_dict["raw__depth_valid_mask"] = src["raw__depth_valid_mask"]
+    if args.keep_raw_depth_images:
+        if "raw__depth_image" in src.files:
+            save_dict["raw__depth_image"] = src["raw__depth_image"]
+        if "raw__distance_image" in src.files:
+            save_dict["raw__distance_image"] = src["raw__distance_image"]
+        if "raw__depth_valid_mask" in src.files:
+            save_dict["raw__depth_valid_mask"] = src["raw__depth_valid_mask"]
     for k in (
         "raw__goal_rel_body",
         "raw__goal_dist",
@@ -420,6 +424,11 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--wheel-radius", type=float, default=0.085)
     parser.add_argument("--wheel-base", type=float, default=0.37)
     parser.add_argument("--drive-sign", type=float, default=None, help="Override drive sign (+1/-1). Default: use source meta.")
+    parser.add_argument(
+        "--keep-raw-depth-images",
+        action="store_true",
+        help="Keep raw depth/distance image tensors in converted output. Default drops them to save disk.",
+    )
     parser.add_argument(
         "--yaw-blend-alpha",
         type=float,

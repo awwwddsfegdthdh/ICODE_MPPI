@@ -18,11 +18,15 @@ class ICODEDynamics(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 3,
         dt: float = 0.02,
+        predict_obs_distance: bool = False,
+        obs_head_hidden_dim: int = 128,
     ):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.dt = dt
+        self.predict_obs_distance_enabled = bool(predict_obs_distance)
+        self.obs_head_hidden_dim = int(obs_head_hidden_dim)
 
         self.f_net = self._build_mlp(
             in_dim=state_dim,
@@ -36,6 +40,18 @@ class ICODEDynamics(nn.Module):
             hidden_dim=hidden_dim,
             num_layers=num_layers,
         )
+
+        self.obs_head = None
+        if self.predict_obs_distance_enabled:
+            # Predict next-step nearest-obstacle distance from current (x_t, u_t).
+            self.obs_head = nn.Sequential(
+                nn.Linear(state_dim + action_dim, self.obs_head_hidden_dim),
+                nn.Tanh(),
+                nn.Linear(self.obs_head_hidden_dim, self.obs_head_hidden_dim),
+                nn.Softplus(),
+                nn.Linear(self.obs_head_hidden_dim, 1),
+                nn.Softplus(),
+            )
 
     @staticmethod
     def _build_mlp(in_dim: int, out_dim: int, hidden_dim: int, num_layers: int) -> nn.Sequential:
@@ -56,3 +72,14 @@ class ICODEDynamics(nn.Module):
     def forward(self, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
         dx = self.derivative(x, u)
         return x + self.dt * dx
+
+    def predict_obstacle_distance(self, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        """
+        Predict next-step nearest obstacle distance (scalar per sample).
+        Returns shape [B].
+        """
+        if self.obs_head is None:
+            raise RuntimeError("Obstacle-distance head is disabled for this checkpoint/model.")
+        xu = torch.cat([x, u], dim=-1)
+        d = self.obs_head(xu).squeeze(-1)
+        return d

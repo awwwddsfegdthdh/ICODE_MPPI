@@ -6,7 +6,9 @@ import numpy as np
 from state_convention import assert_meta_contract, merge_and_validate_meta, read_npz_meta
 
 
-def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Mapping[str, object]]:
+def load_transitions_from_converted(
+    path: Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Mapping[str, object]]:
     data = np.load(path, allow_pickle=True)
     meta = read_npz_meta(data)
     assert_meta_contract(meta)
@@ -26,6 +28,8 @@ def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray,
             np.zeros((0, u.shape[1]), dtype=np.float32),
             np.zeros((0, x.shape[1]), dtype=np.float32),
             np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.uint8),
             meta,
         )
 
@@ -42,6 +46,14 @@ def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray,
     u_t = u[:-1][valid]
     x_tp1 = x[1:][valid]
 
+    if "icode__obs_dist_t" in data.files:
+        obs_dist = data["icode__obs_dist_t"].astype(np.float32)
+        obs_dist_tp1 = obs_dist[1:][valid]
+        obs_dist_valid = np.ones((obs_dist_tp1.shape[0],), dtype=np.uint8)
+    else:
+        obs_dist_tp1 = np.zeros((x_t.shape[0],), dtype=np.float32)
+        obs_dist_valid = np.zeros((x_t.shape[0],), dtype=np.uint8)
+
     if "raw__sim_time" in data.files:
         sim_time = data["raw__sim_time"].astype(np.float32)
         dt = (sim_time[1:] - sim_time[:-1])[valid]
@@ -49,7 +61,7 @@ def load_transitions_from_converted(path: Path) -> Tuple[np.ndarray, np.ndarray,
     else:
         dt = np.zeros((x_t.shape[0],), dtype=np.float32)
 
-    return x_t, u_t, x_tp1, dt, meta
+    return x_t, u_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, meta
 
 
 def safe_std(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
@@ -63,10 +75,12 @@ def build_dataset(args: argparse.Namespace) -> None:
     us: List[np.ndarray] = []
     ys: List[np.ndarray] = []
     dts: List[np.ndarray] = []
+    obs_dists: List[np.ndarray] = []
+    obs_valids: List[np.ndarray] = []
     metas: List[Mapping[str, object]] = []
 
     for p in args.inputs:
-        x_t, u_t, x_tp1, dt, meta = load_transitions_from_converted(p)
+        x_t, u_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, meta = load_transitions_from_converted(p)
         print(f"Loaded {p}: transitions={x_t.shape[0]}")
         metas.append(meta)
         if x_t.shape[0] == 0:
@@ -75,6 +89,8 @@ def build_dataset(args: argparse.Namespace) -> None:
         us.append(u_t)
         ys.append(x_tp1)
         dts.append(dt)
+        obs_dists.append(obs_dist_tp1)
+        obs_valids.append(obs_dist_valid)
 
     if not xs:
         raise RuntimeError("No valid transitions loaded from inputs.")
@@ -84,6 +100,8 @@ def build_dataset(args: argparse.Namespace) -> None:
     u_all = np.concatenate(us, axis=0)
     y_all = np.concatenate(ys, axis=0)
     dt_all = np.concatenate(dts, axis=0)
+    obs_dist_all = np.concatenate(obs_dists, axis=0)
+    obs_valid_all = np.concatenate(obs_valids, axis=0)
     dx_all = y_all - x_all
 
     n = x_all.shape[0]
@@ -103,18 +121,24 @@ def build_dataset(args: argparse.Namespace) -> None:
     y_train = y_all[train_idx]
     dx_train = dx_all[train_idx]
     dt_train = dt_all[train_idx]
+    obs_dist_train = obs_dist_all[train_idx]
+    obs_valid_train = obs_valid_all[train_idx]
 
     x_val = x_all[val_idx]
     u_val = u_all[val_idx]
     y_val = y_all[val_idx]
     dx_val = dx_all[val_idx]
     dt_val = dt_all[val_idx]
+    obs_dist_val = obs_dist_all[val_idx]
+    obs_valid_val = obs_valid_all[val_idx]
 
     x_test = x_all[test_idx]
     u_test = u_all[test_idx]
     y_test = y_all[test_idx]
     dx_test = dx_all[test_idx]
     dt_test = dt_all[test_idx]
+    obs_dist_test = obs_dist_all[test_idx]
+    obs_valid_test = obs_valid_all[test_idx]
 
     x_mean = x_train.mean(axis=0)
     x_std = safe_std(x_train)
@@ -148,16 +172,22 @@ def build_dataset(args: argparse.Namespace) -> None:
         "train__x_tp1": y_train,
         "train__dx_t": dx_train,
         "train__dt": dt_train,
+        "train__obs_dist_tp1": obs_dist_train,
+        "train__obs_dist_valid": obs_valid_train,
         "val__x_t": x_val,
         "val__u_t": u_val,
         "val__x_tp1": y_val,
         "val__dx_t": dx_val,
         "val__dt": dt_val,
+        "val__obs_dist_tp1": obs_dist_val,
+        "val__obs_dist_valid": obs_valid_val,
         "test__x_t": x_test,
         "test__u_t": u_test,
         "test__x_tp1": y_test,
         "test__dx_t": dx_test,
         "test__dt": dt_test,
+        "test__obs_dist_tp1": obs_dist_test,
+        "test__obs_dist_valid": obs_valid_test,
         "stats__x_mean": x_mean.astype(np.float32),
         "stats__x_std": x_std.astype(np.float32),
         "stats__u_mean": u_mean.astype(np.float32),

@@ -60,3 +60,67 @@ conda activate icode_mujoco
 
 - `scripts/run_viewer_seed.sh <seed>`: start viewer with collaborative default args.
 - `scripts/run_fixed_seeds_regression.sh`: run fixed-seed headless regression and print summary.
+- `scripts/batch_collect_weighted_dataset.py`: weighted batch dataset collection (`collect -> convert -> prepare`).
+
+## Weighted Data Collection (60/25/15)
+
+Default plan file:
+
+- `configs/e1_weighted_sampling_60_25_15.json`
+
+Dry-run first (print commands only):
+
+```bash
+/home/wmh/miniconda3/envs/icode_mujoco/bin/python scripts/batch_collect_weighted_dataset.py \
+  --config configs/e1_weighted_sampling_60_25_15.json \
+  --total-episodes 600 \
+  --base-seed 7000 \
+  --dry-run
+```
+
+Run actual collection:
+
+```bash
+/home/wmh/miniconda3/envs/icode_mujoco/bin/python scripts/batch_collect_weighted_dataset.py \
+  --config configs/e1_weighted_sampling_60_25_15.json \
+  --total-episodes 600 \
+  --base-seed 7000
+```
+
+Outputs are written under:
+
+- `datasets/<plan_name>_<timestamp>/raw/*.npz`
+- `datasets/<plan_name>_<timestamp>/converted/*.npz`
+- `datasets/<plan_name>_<timestamp>/bundle/*_bundle.npz`
+- `datasets/<plan_name>_<timestamp>/manifest.json`
+
+## Multi-XML Rotation (Per-Episode Box/Cylinder Mix)
+
+Default multi-XML plan file:
+
+- `configs/e1_weighted_sampling_60_25_15_multixml.json`
+
+This plan enables `xml_rotation` and auto-generates obstacle-shape variants from:
+
+- `E1_Robot/simulation/models/mjcf/E1_SimpleSensor.xml`
+
+Per-episode, one XML variant is sampled uniformly at random, then collection runs for 1 episode per shard (to guarantee episode-level XML switching).
+
+Dry-run:
+
+```bash
+/home/wmh/miniconda3/envs/icode_mujoco/bin/python scripts/batch_collect_weighted_dataset.py \
+  --config configs/e1_weighted_sampling_60_25_15_multixml.json \
+  --total-episodes 120 \
+  --base-seed 7100 \
+  --dry-run
+```
+
+Run:
+
+```bash
+/home/wmh/miniconda3/envs/icode_mujoco/bin/python scripts/batch_collect_weighted_dataset.py \
+  --config configs/e1_weighted_sampling_60_25_15_multixml.json \
+  --total-episodes 120 \
+  --base-seed 7100
+```
