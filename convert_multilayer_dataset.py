@@ -135,6 +135,116 @@ def extract_goal_and_obstacles(src: np.lib.npyio.NpzFile) -> Tuple[np.ndarray, n
     return target_pos_gt, obs_pos_gt
 
 
+def infer_obstacle_radius_and_active(
+    src: np.lib.npyio.NpzFile,
+    raw_episode: np.ndarray,
+    num_steps: int,
+    num_obstacles: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build per-step obstacle footprint radii and active masks.
+    Radius is the XY footprint radius:
+      - cylinder/sphere-like (size_z≈0): radius=size_x
+      - box-like (size_z>0): radius=sqrt(size_x^2 + size_y^2)
+    """
+    radii_step = np.zeros((num_steps, num_obstacles), dtype=np.float32)
+    active_step = np.ones((num_steps, num_obstacles), dtype=np.uint8)
+
+    if "meta__episode_obs_geom_size" not in src.files:
+        return radii_step, active_step
+
+    geom_size_ep = src["meta__episode_obs_geom_size"].astype(np.float32)
+    if geom_size_ep.ndim != 3 or geom_size_ep.shape[1] != num_obstacles:
+        return radii_step, active_step
+
+    s0 = geom_size_ep[:, :, 0]
+    s1 = geom_size_ep[:, :, 1]
+    s2 = geom_size_ep[:, :, 2]
+    is_box_like = s2 > 1e-6
+    radii_ep = np.where(is_box_like, np.sqrt(s0 * s0 + s1 * s1), s0).astype(np.float32)
+
+    if "meta__episode_obs_active_mask" in src.files:
+        active_ep = src["meta__episode_obs_active_mask"].astype(np.uint8)
+        if active_ep.shape == (geom_size_ep.shape[0], num_obstacles):
+            pass
+        else:
+            active_ep = np.ones((geom_size_ep.shape[0], num_obstacles), dtype=np.uint8)
+    else:
+        active_ep = np.ones((geom_size_ep.shape[0], num_obstacles), dtype=np.uint8)
+
+    ep_count = int(geom_size_ep.shape[0])
+    ep_idx = np.clip(raw_episode.astype(np.int64), 0, max(ep_count - 1, 0))
+    radii_step = radii_ep[ep_idx]
+    active_step = active_ep[ep_idx]
+    return radii_step.astype(np.float32), active_step.astype(np.uint8)
+
+
+def compute_gt_obstacle_features(
+    robot_xy: np.ndarray,
+    robot_yaw: np.ndarray,
+    obs_pos_gt: np.ndarray,
+    obs_radius: np.ndarray,
+    obs_active: np.ndarray,
+    default_far: float,
+    robot_radius: float,
+    num_sectors: int = 8,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Returns:
+      clearance_min: [N] all-direction nearest obstacle clearance in XY plane
+      sector_min: [N, num_sectors] omnidirectional sector-wise nearest clearance
+      nearest_bearing_sc: [N, 2] [sin(theta_nearest), cos(theta_nearest)] in robot body frame
+    """
+    n = robot_xy.shape[0]
+    m = obs_pos_gt.shape[1]
+    if m <= 0:
+        return (
+            np.full((n,), float(default_far), dtype=np.float32),
+            np.full((n, num_sectors), float(default_far), dtype=np.float32),
+            np.zeros((n, 2), dtype=np.float32),
+        )
+
+    delta_world = obs_pos_gt[:, :, :2].astype(np.float32) - robot_xy[:, None, :].astype(np.float32)
+    c = np.cos(robot_yaw).astype(np.float32)[:, None]
+    s = np.sin(robot_yaw).astype(np.float32)[:, None]
+    rel_x = c * delta_world[:, :, 0] + s * delta_world[:, :, 1]
+    rel_y = -s * delta_world[:, :, 0] + c * delta_world[:, :, 1]
+
+    dist_center = np.linalg.norm(delta_world, axis=2).astype(np.float32)
+    clearance = dist_center - obs_radius.astype(np.float32) - float(robot_radius)
+    clearance = np.clip(clearance, 0.0, float(default_far))
+
+    active = obs_active.astype(bool)
+    clearance_masked = np.where(active, clearance, float(default_far)).astype(np.float32)
+    min_idx = np.argmin(clearance_masked, axis=1)
+    min_clear = clearance_masked[np.arange(n), min_idx]
+
+    nearest_rel_x = rel_x[np.arange(n), min_idx]
+    nearest_rel_y = rel_y[np.arange(n), min_idx]
+    nearest_bearing = np.arctan2(nearest_rel_y, nearest_rel_x).astype(np.float32)
+    nearest_sin = np.sin(nearest_bearing).astype(np.float32)
+    nearest_cos = np.cos(nearest_bearing).astype(np.float32)
+    nearest_bearing_sc = np.stack([nearest_sin, nearest_cos], axis=1).astype(np.float32)
+
+    ang = np.arctan2(rel_y, rel_x).astype(np.float32)  # [-pi, pi]
+    sector_min = np.full((n, num_sectors), float(default_far), dtype=np.float32)
+    edges = np.linspace(-np.pi, np.pi, num_sectors + 1, dtype=np.float32)
+    for k in range(num_sectors):
+        lo = edges[k]
+        hi = edges[k + 1]
+        in_sector = active & (ang >= lo) & (ang < hi if k < (num_sectors - 1) else ang <= hi)
+        masked = np.where(in_sector, clearance, float(default_far)).astype(np.float32)
+        sector_min[:, k] = np.min(masked, axis=1)
+
+    no_active = ~np.any(active, axis=1)
+    if np.any(no_active):
+        min_clear[no_active] = float(default_far)
+        nearest_bearing_sc[no_active] = 0.0
+        sector_min[no_active, :] = float(default_far)
+
+    return min_clear.astype(np.float32), sector_min.astype(np.float32), nearest_bearing_sc.astype(np.float32)
+
+
 def convert_dataset(args: argparse.Namespace) -> None:
     src = np.load(args.input, allow_pickle=True)
     src_drive_sign = None
@@ -224,12 +334,42 @@ def convert_dataset(args: argparse.Namespace) -> None:
     free_corridor_width = np.clip(depth_sector_min[:, 0] + depth_sector_min[:, 2], 0.0, 2.0 * args.default_far)
     depth_collision_flag = (np.min(depth_sector_min, axis=1) < args.collision_threshold).astype(np.float32)
     touch_flag = (touch_force > args.touch_force_threshold).astype(np.float32)
-    obs_dist_min = np.min(depth_sector_min, axis=1).astype(np.float32)
+    obs_dist_sensor_min = np.min(depth_sector_min, axis=1).astype(np.float32)
+
+    obs_radius_step, obs_active_step = infer_obstacle_radius_and_active(
+        src=src,
+        raw_episode=raw_episode,
+        num_steps=n,
+        num_obstacles=obs_pos_gt.shape[1],
+    )
+    robot_radius = float(src["meta__path_robot_radius"].reshape(-1)[0]) if "meta__path_robot_radius" in src.files else 0.0
+    obs_clear_min_gt, obs_sector_min_gt, obs_nearest_bearing_sc = compute_gt_obstacle_features(
+        robot_xy=np.stack([x_odom, y_odom], axis=1).astype(np.float32),
+        robot_yaw=psi_odom.astype(np.float32),
+        obs_pos_gt=obs_pos_gt.astype(np.float32),
+        obs_radius=obs_radius_step.astype(np.float32),
+        obs_active=obs_active_step.astype(np.uint8),
+        default_far=float(args.default_far),
+        robot_radius=float(robot_radius),
+        num_sectors=8,
+    )
 
     state_est = np.stack([x_odom, y_odom, psi_odom, v_body, wz_body, dq_l, dq_r], axis=1).astype(np.float32)
 
     icode_x_t = state_est.copy()
     icode_u_t = u_applied.copy()
+    icode_ctx_t = np.concatenate(
+        [
+            goal_rel_body.astype(np.float32),
+            goal_dist[:, None].astype(np.float32),
+            goal_heading_err[:, None].astype(np.float32),
+            depth_sector_min.astype(np.float32),
+            free_corridor_width[:, None].astype(np.float32),
+            depth_collision_flag[:, None].astype(np.float32),
+            touch_flag[:, None].astype(np.float32),
+        ],
+        axis=1,
+    ).astype(np.float32)
 
     mppi_state_t = state_est.copy()
     mppi_u_t = u_applied.copy()
@@ -321,7 +461,23 @@ def convert_dataset(args: argparse.Namespace) -> None:
             ],
             dtype=object,
         ),
-        "meta__icode_aux_fields": np.array(["obs_dist_min_next"], dtype=object),
+        "meta__icode_aux_fields": np.array(["obs_clear_min_gt_next"], dtype=object),
+        "meta__icode_context_fields": np.array(
+            [
+                "goal_rel_body_x",
+                "goal_rel_body_y",
+                "goal_dist",
+                "goal_heading_err",
+                "depth_lf_min",
+                "depth_f_min",
+                "depth_rf_min",
+                "free_corridor_width",
+                "depth_collision_flag",
+                "touch_flag",
+            ],
+            dtype=object,
+        ),
+        "meta__icode_obs_distance_source": np.array(["gt_clearance_xy"], dtype=object),
         "meta__supervision_state_fields": np.array(["x_gt", "y_gt", "psi_gt", "v_body_gt", "wz_gt", "dqL", "dqR"], dtype=object),
         "meta__has_gt_state_labels": np.array([1 if has_gt_state_labels else 0], dtype=np.uint8),
         # raw layer
@@ -338,6 +494,9 @@ def convert_dataset(args: argparse.Namespace) -> None:
         "derived__goal_dist": goal_dist.astype(np.float32),
         "derived__goal_heading_err_from_odom_yaw": goal_heading_err.astype(np.float32),
         "derived__depth_sector_min": depth_sector_min.astype(np.float32),
+        "derived__obs_gt_sector_min": obs_sector_min_gt.astype(np.float32),
+        "derived__obs_gt_clear_min": obs_clear_min_gt.astype(np.float32),
+        "derived__obs_gt_nearest_bearing_sin_cos": obs_nearest_bearing_sc.astype(np.float32),
         "derived__free_corridor_width": free_corridor_width.astype(np.float32),
         "derived__depth_collision_flag": depth_collision_flag.astype(np.float32),
         "derived__touch_flag": touch_flag.astype(np.float32),
@@ -359,7 +518,9 @@ def convert_dataset(args: argparse.Namespace) -> None:
         "icode__x_label_t": supervision_state_t.astype(np.float32),
         "icode__x_label_valid": supervision_state_valid.astype(np.uint8),
         "icode__u_t": icode_u_t,
-        "icode__obs_dist_t": obs_dist_min.astype(np.float32),
+        "icode__ctx_t": icode_ctx_t,
+        "icode__obs_dist_t": obs_clear_min_gt.astype(np.float32),
+        "icode__obs_dist_sensor_t": obs_dist_sensor_min.astype(np.float32),
         "mppi__state_t": mppi_state_t,
         "mppi__u_t": mppi_u_t,
         "mppi__u_prev": mppi_u_prev,

@@ -66,6 +66,7 @@ def load_icode_checkpoint(ckpt_path: Path, device: torch.device) -> ICODEDynamic
     model = ICODEDynamics(
         state_dim=int(cfg.get("state_dim", 7)),
         action_dim=int(cfg.get("action_dim", 2)),
+        context_dim=int(cfg.get("context_dim", 0)),
         hidden_dim=int(cfg.get("hidden_dim", 640)),
         num_layers=int(cfg.get("num_layers", 6)),
         dt=float(cfg.get("dt", 0.02)),
@@ -86,14 +87,14 @@ class HybridDynamics(torch.nn.Module):
         self.state_dim = int(getattr(icode_model, "state_dim", 7))
         self.action_dim = int(getattr(icode_model, "action_dim", 2))
 
-    def forward(self, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-        x_i = self.icode(x, u)
+    def forward(self, x: torch.Tensor, u: torch.Tensor, ctx: torch.Tensor | None = None) -> torch.Tensor:
+        x_i = self.icode(x, u, ctx)
         x_k = self.kin(x, u)
         return self.alpha * x_i + (1.0 - self.alpha) * x_k
 
-    def predict_obstacle_distance(self, x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+    def predict_obstacle_distance(self, x: torch.Tensor, u: torch.Tensor, ctx: torch.Tensor | None = None) -> torch.Tensor:
         if hasattr(self.icode, "predict_obstacle_distance"):
-            return self.icode.predict_obstacle_distance(x, u)
+            return self.icode.predict_obstacle_distance(x, u, ctx)
         raise AttributeError("Underlying ICODE model does not expose predict_obstacle_distance().")
 
 

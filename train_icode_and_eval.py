@@ -22,12 +22,14 @@ class TransitionDataset(Dataset):
         x_t: np.ndarray,
         u_t: np.ndarray,
         x_tp1: np.ndarray,
+        ctx_t: Optional[np.ndarray] = None,
         obs_dist_tp1: Optional[np.ndarray] = None,
         obs_dist_valid: Optional[np.ndarray] = None,
     ):
         self.x_t = torch.from_numpy(x_t.astype(np.float32))
         self.u_t = torch.from_numpy(u_t.astype(np.float32))
         self.x_tp1 = torch.from_numpy(x_tp1.astype(np.float32))
+        self.ctx_t = None if ctx_t is None else torch.from_numpy(ctx_t.astype(np.float32))
         self.obs_dist_tp1 = None if obs_dist_tp1 is None else torch.from_numpy(obs_dist_tp1.astype(np.float32))
         self.obs_dist_valid = None if obs_dist_valid is None else torch.from_numpy(obs_dist_valid.astype(np.uint8))
 
@@ -35,23 +37,25 @@ class TransitionDataset(Dataset):
         return self.x_t.shape[0]
 
     def __getitem__(self, idx: int):
+        ctx_i = self.ctx_t[idx] if self.ctx_t is not None else torch.zeros((0,), dtype=torch.float32)
         if self.obs_dist_tp1 is not None and self.obs_dist_valid is not None:
-            return self.x_t[idx], self.u_t[idx], self.x_tp1[idx], self.obs_dist_tp1[idx], self.obs_dist_valid[idx]
-        return self.x_t[idx], self.u_t[idx], self.x_tp1[idx]
+            return self.x_t[idx], self.u_t[idx], self.x_tp1[idx], ctx_i, self.obs_dist_tp1[idx], self.obs_dist_valid[idx]
+        return self.x_t[idx], self.u_t[idx], self.x_tp1[idx], ctx_i
 
 
 class RolloutWindowDataset(Dataset):
-    def __init__(self, x0: np.ndarray, u_windows: np.ndarray, y_windows: np.ndarray):
-        # x0: [N, D], u_windows: [N, K, U], y_windows: [N, K, D]
+    def __init__(self, x0: np.ndarray, u_windows: np.ndarray, y_windows: np.ndarray, c_windows: np.ndarray):
+        # x0: [N, D], u_windows: [N, K, U], y_windows: [N, K, D], c_windows: [N, K, C]
         self.x0 = torch.from_numpy(x0.astype(np.float32))
         self.u_windows = torch.from_numpy(u_windows.astype(np.float32))
         self.y_windows = torch.from_numpy(y_windows.astype(np.float32))
+        self.c_windows = torch.from_numpy(c_windows.astype(np.float32))
 
     def __len__(self) -> int:
         return self.x0.shape[0]
 
     def __getitem__(self, idx: int):
-        return self.x0[idx], self.u_windows[idx], self.y_windows[idx]
+        return self.x0[idx], self.u_windows[idx], self.y_windows[idx], self.c_windows[idx]
 
 
 def set_seed(seed: int) -> None:
@@ -126,6 +130,91 @@ def build_gt_state_labels_or_none(d: np.lib.npyio.NpzFile, x_fallback: np.ndarra
     return out
 
 
+def context_from_npz_or_none(d: np.lib.npyio.NpzFile, n_rows: int) -> Optional[np.ndarray]:
+    if "icode__ctx_t" in d.files:
+        return d["icode__ctx_t"].astype(np.float32)
+    if "mppi__cost_context" in d.files:
+        mctx = d["mppi__cost_context"].astype(np.float32)
+        if mctx.shape[1] >= 10:
+            return mctx[:, :10].astype(np.float32)
+
+    if "derived__obs_gt_sector_min" in d.files:
+        def get1(key: str) -> np.ndarray:
+            if key in d.files:
+                return d[key].astype(np.float32).reshape(n_rows, 1)
+            return np.zeros((n_rows, 1), dtype=np.float32)
+
+        goal_rel = d["derived__goal_rel_body_from_odom_yaw"].astype(np.float32) if "derived__goal_rel_body_from_odom_yaw" in d.files else np.zeros((n_rows, 2), dtype=np.float32)
+        obs_sector = d["derived__obs_gt_sector_min"].astype(np.float32)
+        obs_clear_min = (
+            d["derived__obs_gt_clear_min"].astype(np.float32).reshape(n_rows, 1)
+            if "derived__obs_gt_clear_min" in d.files
+            else np.min(obs_sector, axis=1, keepdims=True).astype(np.float32)
+        )
+        obs_bearing_sc = (
+            d["derived__obs_gt_nearest_bearing_sin_cos"].astype(np.float32)
+            if "derived__obs_gt_nearest_bearing_sin_cos" in d.files
+            else np.zeros((n_rows, 2), dtype=np.float32)
+        )
+        return np.concatenate(
+            [
+                goal_rel,
+                get1("derived__goal_dist"),
+                get1("derived__goal_heading_err_from_odom_yaw"),
+                obs_sector,
+                obs_clear_min,
+                obs_bearing_sc,
+                get1("derived__free_corridor_width"),
+                get1("derived__depth_collision_flag"),
+                get1("derived__touch_flag"),
+            ],
+            axis=1,
+        ).astype(np.float32)
+
+    def get1(key: str) -> np.ndarray:
+        if key in d.files:
+            return d[key].astype(np.float32).reshape(n_rows, 1)
+        return np.zeros((n_rows, 1), dtype=np.float32)
+
+    if "derived__goal_rel_body_from_odom_yaw" in d.files or "derived__depth_sector_min" in d.files:
+        goal_rel = d["derived__goal_rel_body_from_odom_yaw"].astype(np.float32) if "derived__goal_rel_body_from_odom_yaw" in d.files else np.zeros((n_rows, 2), dtype=np.float32)
+        depth3 = d["derived__depth_sector_min"].astype(np.float32) if "derived__depth_sector_min" in d.files else np.zeros((n_rows, 3), dtype=np.float32)
+        return np.concatenate(
+            [
+                goal_rel,
+                get1("derived__goal_dist"),
+                get1("derived__goal_heading_err_from_odom_yaw"),
+                depth3,
+                get1("derived__free_corridor_width"),
+                get1("derived__depth_collision_flag"),
+                get1("derived__touch_flag"),
+            ],
+            axis=1,
+        ).astype(np.float32)
+    return None
+
+
+def align_context_dim(ctx: Optional[np.ndarray], target_dim: int, n_rows: int) -> np.ndarray:
+    if target_dim <= 0:
+        return np.zeros((n_rows, 0), dtype=np.float32)
+    if ctx is None:
+        return np.zeros((n_rows, target_dim), dtype=np.float32)
+    if ctx.shape[1] == target_dim:
+        return ctx.astype(np.float32)
+    if ctx.shape[1] > target_dim:
+        return ctx[:, :target_dim].astype(np.float32)
+    pad = np.zeros((ctx.shape[0], target_dim - ctx.shape[1]), dtype=np.float32)
+    return np.concatenate([ctx.astype(np.float32), pad], axis=1)
+
+
+def bundle_context_or_zeros(bundle: np.lib.npyio.NpzFile, split: str) -> np.ndarray:
+    key = f"{split}__ctx_t"
+    n = bundle[f"{split}__x_t"].shape[0]
+    if key in bundle.files:
+        return bundle[key].astype(np.float32)
+    return np.zeros((n, 0), dtype=np.float32)
+
+
 def evaluate_loader(
     model: torch.nn.Module,
     loader: DataLoader,
@@ -145,20 +234,21 @@ def evaluate_loader(
 
     with torch.no_grad():
         for batch in loader:
-            if len(batch) == 5:
-                x_t, u_t, y_t, obs_t, obs_valid = batch
+            if len(batch) == 6:
+                x_t, u_t, y_t, c_t, obs_t, obs_valid = batch
                 obs_t = obs_t.to(device, non_blocking=True)
                 obs_valid = obs_valid.to(device, non_blocking=True)
             else:
-                x_t, u_t, y_t = batch
+                x_t, u_t, y_t, c_t = batch
                 obs_t = None
                 obs_valid = None
             x_t = x_t.to(device, non_blocking=True)
             u_t = u_t.to(device, non_blocking=True)
             y_t = y_t.to(device, non_blocking=True)
+            c_t = c_t.to(device, non_blocking=True)
 
             with build_amp_context(device, amp_dtype):
-                pred = model(x_t, u_t)
+                pred = model(x_t, u_t, c_t)
                 norm_err = (pred - y_t) / y_std
                 norm_mse = torch.mean(norm_err * norm_err)
 
@@ -174,7 +264,7 @@ def evaluate_loader(
             if obs_model is not None and hasattr(obs_model, "predict_obstacle_distance") and obs_t is not None and obs_valid is not None:
                 mask = obs_valid > 0
                 if torch.any(mask):
-                    pred_obs = obs_model.predict_obstacle_distance(x_t, u_t)
+                    pred_obs = obs_model.predict_obstacle_distance(x_t, u_t, c_t)
                     err = pred_obs[mask] - obs_t[mask]
                     total_obs_mse += float(torch.sum(err * err).item())
                     total_obs_mae += float(torch.sum(torch.abs(err)).item())
@@ -200,7 +290,7 @@ def evaluate_loader(
     return out
 
 
-def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     d = np.load(path, allow_pickle=True)
     required = [
         "icode__x_t",
@@ -215,6 +305,7 @@ def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndar
 
     x = d["icode__x_t"].astype(np.float32)
     u = d["icode__u_t"].astype(np.float32)
+    ctx = context_from_npz_or_none(d=d, n_rows=x.shape[0])
     ep = d["raw__episode"].astype(np.int32)
     if "icode__x_label_t" in d.files:
         x_label = d["icode__x_label_t"].astype(np.float32)
@@ -242,11 +333,12 @@ def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndar
 
     x_t = x[:-1][valid]
     u_t = u[:-1][valid]
+    c_t = ctx[:-1][valid] if ctx is not None else np.zeros((x_t.shape[0], 0), dtype=np.float32)
     x_tp1 = x_label[1:][valid]
     gt_xy_tp1 = gt_pos[1:, :2][valid]
     gt_wz_tp1 = gt_ang[1:, 2][valid]
     ep_tp1 = ep[1:][valid]
-    return x_t, u_t, x_tp1, gt_xy_tp1, gt_wz_tp1, ep_tp1
+    return x_t, u_t, c_t, x_tp1, gt_xy_tp1, gt_wz_tp1, ep_tp1
 
 
 def evaluate_against_groundtruth(
@@ -255,6 +347,7 @@ def evaluate_against_groundtruth(
     device: torch.device,
     batch_size: int,
     rollout_horizon: int,
+    context_dim: int,
     amp_dtype,
 ) -> Dict[str, float]:
     if len(eval_paths) == 0:
@@ -269,20 +362,33 @@ def evaluate_against_groundtruth(
             "rollout_episodes": 0,
         }
 
-    x_list, u_list, y_list, gt_xy_list, gt_wz_list = [], [], [], [], []
+    x_list, u_list, c_list, y_list, gt_xy_list, gt_wz_list = [], [], [], [], [], []
     for p in eval_paths:
-        x_t, u_t, x_tp1, gt_xy_tp1, gt_wz_tp1, _ = load_gt_transition_eval(p)
+        x_t, u_t, c_t, x_tp1, gt_xy_tp1, gt_wz_tp1, _ = load_gt_transition_eval(p)
         x_list.append(x_t)
         u_list.append(u_t)
+        c_list.append(align_context_dim(c_t, target_dim=context_dim, n_rows=x_t.shape[0]))
         y_list.append(x_tp1)
         gt_xy_list.append(gt_xy_tp1)
         gt_wz_list.append(gt_wz_tp1)
 
     x_all = np.concatenate(x_list, axis=0)
     u_all = np.concatenate(u_list, axis=0)
+    c_all = np.concatenate(c_list, axis=0)
     y_all = np.concatenate(y_list, axis=0)
     gt_xy_all = np.concatenate(gt_xy_list, axis=0)
     gt_wz_all = np.concatenate(gt_wz_list, axis=0)
+    if x_all.shape[0] == 0:
+        return {
+            "one_step_label_rmse": float("nan"),
+            "one_step_gt_xy_rmse": float("nan"),
+            "one_step_gt_xy_mae": float("nan"),
+            "one_step_gt_wz_rmse": float("nan"),
+            "one_step_gt_wz_mae": float("nan"),
+            "rollout_ade": float("nan"),
+            "rollout_fde": float("nan"),
+            "rollout_episodes": 0,
+        }
 
     model.eval()
     preds = []
@@ -290,8 +396,9 @@ def evaluate_against_groundtruth(
         for i in range(0, x_all.shape[0], batch_size):
             xb = torch.from_numpy(x_all[i : i + batch_size]).to(device, non_blocking=True)
             ub = torch.from_numpy(u_all[i : i + batch_size]).to(device, non_blocking=True)
+            cb = torch.from_numpy(c_all[i : i + batch_size]).to(device, non_blocking=True)
             with build_amp_context(device, amp_dtype):
-                pb = model(xb, ub).float().cpu().numpy()
+                pb = model(xb, ub, cb).float().cpu().numpy()
             preds.append(pb)
     pred_all = np.concatenate(preds, axis=0)
 
@@ -308,6 +415,11 @@ def evaluate_against_groundtruth(
             d = np.load(p, allow_pickle=True)
             x = d["icode__x_t"].astype(np.float32)
             u = d["icode__u_t"].astype(np.float32)
+            c = align_context_dim(
+                context_from_npz_or_none(d=d, n_rows=x.shape[0]),
+                target_dim=context_dim,
+                n_rows=x.shape[0],
+            )
             ep = d["raw__episode"].astype(np.int32)
             gt_pos = d["gt__base_pos_gt"].astype(np.float32)
 
@@ -323,8 +435,9 @@ def evaluate_against_groundtruth(
                 errs = []
                 for k in range(h):
                     u_k = torch.from_numpy(u[idx[k] : idx[k] + 1]).to(device, non_blocking=True)
+                    c_k = torch.from_numpy(c[idx[k] : idx[k] + 1]).to(device, non_blocking=True)
                     with build_amp_context(device, amp_dtype):
-                        x_pred = model(x_pred, u_k)
+                        x_pred = model(x_pred, u_k, c_k)
                     gt_xy = gt_pos[idx[k + 1], :2]
                     pred_xy = x_pred[0, :2].float().cpu().numpy()
                     errs.append(float(np.linalg.norm(pred_xy - gt_xy)))
@@ -377,10 +490,12 @@ def build_rollout_windows_from_paths(
     max_windows: int,
     seed: int,
     supervision_source: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    context_dim: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     x0_windows = []
     u_windows = []
     y_windows = []
+    c_windows = []
 
     for p in paths:
         d = np.load(p, allow_pickle=True)
@@ -390,6 +505,11 @@ def build_rollout_windows_from_paths(
                 raise KeyError(f"{p} missing {key}")
 
         x = d["icode__x_t"].astype(np.float32)
+        c = align_context_dim(
+            ctx=context_from_npz_or_none(d=d, n_rows=x.shape[0]),
+            target_dim=context_dim,
+            n_rows=x.shape[0],
+        )
         if supervision_source == "gt_state":
             if "icode__x_label_t" in d.files:
                 y_ref = d["icode__x_label_t"].astype(np.float32)
@@ -431,6 +551,7 @@ def build_rollout_windows_from_paths(
                                     x0_windows.append(x[w[0]])
                                     u_windows.append(u[w[:-1]])
                                     y_windows.append(y_ref[w[1:]])
+                                    c_windows.append(c[w[:-1]])
                         seq_idx = [ii]
                 if len(seq_idx) > rollout_steps:
                     seq_arr = np.array(seq_idx, dtype=np.int32)
@@ -440,6 +561,7 @@ def build_rollout_windows_from_paths(
                             x0_windows.append(x[w[0]])
                             u_windows.append(u[w[:-1]])
                             y_windows.append(y_ref[w[1:]])
+                            c_windows.append(c[w[:-1]])
             else:
                 for s in range(0, idx.shape[0] - rollout_steps):
                     w = idx[s : s + rollout_steps + 1]
@@ -447,17 +569,20 @@ def build_rollout_windows_from_paths(
                         x0_windows.append(x[w[0]])
                         u_windows.append(u[w[:-1]])
                         y_windows.append(y_ref[w[1:]])
+                        c_windows.append(c[w[:-1]])
 
     if not x0_windows:
         return (
             np.zeros((0, 7), dtype=np.float32),
             np.zeros((0, rollout_steps, 2), dtype=np.float32),
             np.zeros((0, rollout_steps, 7), dtype=np.float32),
+            np.zeros((0, rollout_steps, 0), dtype=np.float32),
         )
 
     x0_arr = np.stack(x0_windows, axis=0)
     u_arr = np.stack(u_windows, axis=0)
     y_arr = np.stack(y_windows, axis=0)
+    c_arr = np.stack(c_windows, axis=0)
 
     if max_windows > 0 and x0_arr.shape[0] > max_windows:
         rng = np.random.default_rng(seed)
@@ -465,8 +590,9 @@ def build_rollout_windows_from_paths(
         x0_arr = x0_arr[choose]
         u_arr = u_arr[choose]
         y_arr = y_arr[choose]
+        c_arr = c_arr[choose]
 
-    return x0_arr, u_arr, y_arr
+    return x0_arr, u_arr, y_arr, c_arr
 
 
 def cycle_loader(loader: DataLoader) -> Iterator:
@@ -550,17 +676,18 @@ def compute_rollout_loss(
     x0: torch.Tensor,
     u_window: torch.Tensor,
     y_window: torch.Tensor,
+    c_window: torch.Tensor,
     y_std: torch.Tensor,
     state_loss_weights: torch.Tensor,
     late_bias: float,
     terminal_weight: float,
 ) -> torch.Tensor:
-    # x0: [B, D], u_window: [B, K, U], y_window: [B, K, D]
+    # x0: [B, D], u_window: [B, K, U], y_window: [B, K, D], c_window: [B, K, C]
     x_pred = x0
     losses = []
     steps = u_window.shape[1]
     for t in range(steps):
-        x_pred = model(x_pred, u_window[:, t, :])
+        x_pred = model(x_pred, u_window[:, t, :], c_window[:, t, :])
         target = y_window[:, t, :]
         norm_err = (x_pred - target) / y_std
         weighted = (norm_err * norm_err) * state_loss_weights
@@ -597,10 +724,20 @@ def train(args: argparse.Namespace) -> None:
             "Fallback to dynamics-only training."
         )
 
+    train_ctx = bundle_context_or_zeros(bundle=bundle, split="train")
+    val_ctx = bundle_context_or_zeros(bundle=bundle, split="val")
+    test_ctx = bundle_context_or_zeros(bundle=bundle, split="test")
+    context_dim = int(train_ctx.shape[1])
+    if val_ctx.shape[1] != context_dim or test_ctx.shape[1] != context_dim:
+        raise RuntimeError(
+            f"Context dim mismatch across splits: train={context_dim}, val={val_ctx.shape[1]}, test={test_ctx.shape[1]}"
+        )
+
     train_ds = TransitionDataset(
         bundle["train__x_t"],
         bundle["train__u_t"],
         bundle["train__x_tp1"],
+        ctx_t=train_ctx,
         obs_dist_tp1=(bundle["train__obs_dist_tp1"] if predict_obs_distance_active else None),
         obs_dist_valid=(bundle["train__obs_dist_valid"] if predict_obs_distance_active else None),
     )
@@ -608,6 +745,7 @@ def train(args: argparse.Namespace) -> None:
         bundle["val__x_t"],
         bundle["val__u_t"],
         bundle["val__x_tp1"],
+        ctx_t=val_ctx,
         obs_dist_tp1=(bundle["val__obs_dist_tp1"] if predict_obs_distance_active else None),
         obs_dist_valid=(bundle["val__obs_dist_valid"] if predict_obs_distance_active else None),
     )
@@ -615,6 +753,7 @@ def train(args: argparse.Namespace) -> None:
         bundle["test__x_t"],
         bundle["test__u_t"],
         bundle["test__x_tp1"],
+        ctx_t=test_ctx,
         obs_dist_tp1=(bundle["test__obs_dist_tp1"] if predict_obs_distance_active else None),
         obs_dist_valid=(bundle["test__obs_dist_valid"] if predict_obs_distance_active else None),
     )
@@ -659,15 +798,16 @@ def train(args: argparse.Namespace) -> None:
     rollout_iter = None
     if args.rollout_loss_weight > 0 and args.rollout_steps >= 2:
         rollout_paths = [Path(p) for p in args.rollout_train_inputs]
-        x0w, uw, yw = build_rollout_windows_from_paths(
+        x0w, uw, yw, cw = build_rollout_windows_from_paths(
             paths=rollout_paths,
             rollout_steps=args.rollout_steps,
             max_windows=args.rollout_max_windows,
             seed=args.seed,
             supervision_source=str(args.rollout_supervision_source),
+            context_dim=context_dim,
         )
         if x0w.shape[0] > 0:
-            rollout_ds = RolloutWindowDataset(x0w, uw, yw)
+            rollout_ds = RolloutWindowDataset(x0w, uw, yw, cw)
             rollout_loader = DataLoader(
                 rollout_ds,
                 batch_size=args.rollout_batch_size,
@@ -692,6 +832,7 @@ def train(args: argparse.Namespace) -> None:
     raw_model = ICODEDynamics(
         state_dim=args.state_dim,
         action_dim=args.action_dim,
+        context_dim=context_dim,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         dt=args.dt,
@@ -778,6 +919,7 @@ def train(args: argparse.Namespace) -> None:
             "config": {
                 "state_dim": args.state_dim,
                 "action_dim": args.action_dim,
+                "context_dim": int(context_dim),
                 "hidden_dim": args.hidden_dim,
                 "num_layers": args.num_layers,
                 "dt": args.dt,
@@ -816,36 +958,39 @@ def train(args: argparse.Namespace) -> None:
         total_samples = 0
 
         for batch in train_loader:
-            if len(batch) == 5:
-                x_t, u_t, y_t, obs_t, obs_valid = batch
+            if len(batch) == 6:
+                x_t, u_t, y_t, c_t, obs_t, obs_valid = batch
                 obs_t = obs_t.to(device, non_blocking=True)
                 obs_valid = obs_valid.to(device, non_blocking=True)
             else:
-                x_t, u_t, y_t = batch
+                x_t, u_t, y_t, c_t = batch
                 obs_t = None
                 obs_valid = None
             x_t = x_t.to(device, non_blocking=True)
             u_t = u_t.to(device, non_blocking=True)
             y_t = y_t.to(device, non_blocking=True)
+            c_t = c_t.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             with build_amp_context(device, amp_dtype) if use_amp else nullcontext():
-                pred = model(x_t, u_t)
+                pred = model(x_t, u_t, c_t)
                 norm_err = (pred - y_t) / y_std
                 one_step_weighted = (norm_err * norm_err) * state_loss_weights
                 one_step_loss = torch.mean(torch.sum(one_step_weighted, dim=1) / torch.sum(state_loss_weights))
 
                 rollout_loss = torch.tensor(0.0, device=device)
                 if rollout_iter is not None:
-                    x0w, uw, yw = next(rollout_iter)
+                    x0w, uw, yw, cw = next(rollout_iter)
                     x0w = x0w.to(device, non_blocking=True)
                     uw = uw.to(device, non_blocking=True)
                     yw = yw.to(device, non_blocking=True)
+                    cw = cw.to(device, non_blocking=True)
                     rollout_loss = compute_rollout_loss(
                         model,
                         x0w,
                         uw,
                         yw,
+                        cw,
                         y_std=y_std,
                         state_loss_weights=state_loss_weights,
                         late_bias=args.rollout_late_bias,
@@ -857,7 +1002,7 @@ def train(args: argparse.Namespace) -> None:
                 if predict_obs_distance_active and obs_t is not None and obs_valid is not None:
                     mask = obs_valid > 0
                     if torch.any(mask):
-                        pred_obs = raw_model.predict_obstacle_distance(x_t, u_t)
+                        pred_obs = raw_model.predict_obstacle_distance(x_t, u_t, c_t)
                         obs_dist_loss = F.smooth_l1_loss(pred_obs[mask], obs_t[mask])
                         obs_count = int(mask.sum().item())
 
@@ -979,6 +1124,7 @@ def train(args: argparse.Namespace) -> None:
         device=device,
         batch_size=args.batch_size,
         rollout_horizon=args.rollout_horizon,
+        context_dim=context_dim,
         amp_dtype=amp_dtype,
     )
 
@@ -986,6 +1132,7 @@ def train(args: argparse.Namespace) -> None:
         "device": str(device),
         "epochs": args.epochs,
         "batch_size": args.batch_size,
+        "context_dim": int(context_dim),
         "lr": args.lr,
         "weight_decay": args.weight_decay,
         "optimizer": args.optimizer,

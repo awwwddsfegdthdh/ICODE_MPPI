@@ -75,7 +75,8 @@
     "seed": 42,
     "train_ratio": 0.8,
     "val_ratio": 0.1,
-    "label_source": "gt_state"
+    "label_source": "gt_state",
+    "split_by": "episode"
   },
   "profiles": [
     {

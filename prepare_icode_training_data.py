@@ -22,10 +22,165 @@ def world_to_body_x(v_world_xy: np.ndarray, yaw: np.ndarray) -> np.ndarray:
     return (c * v_world_xy[:, 0] + s * v_world_xy[:, 1]).astype(np.float32)
 
 
+def safe_std(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    s = a.std(axis=0)
+    s[s < eps] = eps
+    return s
+
+
+def build_context_from_converted(data: np.lib.npyio.NpzFile, n: int) -> Tuple[np.ndarray, np.ndarray]:
+    if "icode__ctx_t" in data.files:
+        ctx = data["icode__ctx_t"].astype(np.float32)
+        if "meta__icode_context_fields" in data.files:
+            fields = data["meta__icode_context_fields"].astype(object)
+        else:
+            fields = np.array([f"ctx_{i}" for i in range(ctx.shape[1])], dtype=object)
+        return ctx, fields
+
+    if "mppi__cost_context" in data.files:
+        mctx = data["mppi__cost_context"].astype(np.float32)
+        # [goal_rel(2), goal_dist, heading_err, depth(3), corridor, collision, touch, v, wz]
+        if mctx.shape[1] >= 10:
+            ctx = mctx[:, :10].astype(np.float32)
+            fields = np.array(
+                [
+                    "goal_rel_body_x",
+                    "goal_rel_body_y",
+                    "goal_dist",
+                    "goal_heading_err",
+                    "depth_lf_min",
+                    "depth_f_min",
+                    "depth_rf_min",
+                    "free_corridor_width",
+                    "depth_collision_flag",
+                    "touch_flag",
+                ],
+                dtype=object,
+            )
+            return ctx, fields
+
+    if "derived__obs_gt_sector_min" in data.files:
+        goal_rel = (
+            data["derived__goal_rel_body_from_odom_yaw"].astype(np.float32)
+            if "derived__goal_rel_body_from_odom_yaw" in data.files
+            else np.zeros((n, 2), dtype=np.float32)
+        )
+        obs_sector = data["derived__obs_gt_sector_min"].astype(np.float32)
+        obs_clear_min = (
+            data["derived__obs_gt_clear_min"].astype(np.float32).reshape(n, 1)
+            if "derived__obs_gt_clear_min" in data.files
+            else np.min(obs_sector, axis=1, keepdims=True).astype(np.float32)
+        )
+        obs_bearing_sc = (
+            data["derived__obs_gt_nearest_bearing_sin_cos"].astype(np.float32)
+            if "derived__obs_gt_nearest_bearing_sin_cos" in data.files
+            else np.zeros((n, 2), dtype=np.float32)
+        )
+
+        def get1(key: str) -> np.ndarray:
+            if key in data.files:
+                return data[key].astype(np.float32).reshape(n, 1)
+            return np.zeros((n, 1), dtype=np.float32)
+
+        ctx = np.concatenate(
+            [
+                goal_rel,
+                get1("derived__goal_dist"),
+                get1("derived__goal_heading_err_from_odom_yaw"),
+                obs_sector,
+                obs_clear_min,
+                obs_bearing_sc,
+                get1("derived__free_corridor_width"),
+                get1("derived__depth_collision_flag"),
+                get1("derived__touch_flag"),
+            ],
+            axis=1,
+        ).astype(np.float32)
+        fields = np.array(
+            [
+                "goal_rel_body_x",
+                "goal_rel_body_y",
+                "goal_dist",
+                "goal_heading_err",
+                "obs_sector_min_0",
+                "obs_sector_min_1",
+                "obs_sector_min_2",
+                "obs_sector_min_3",
+                "obs_sector_min_4",
+                "obs_sector_min_5",
+                "obs_sector_min_6",
+                "obs_sector_min_7",
+                "obs_clear_min_gt",
+                "obs_nearest_bearing_sin",
+                "obs_nearest_bearing_cos",
+                "free_corridor_width",
+                "depth_collision_flag",
+                "touch_flag",
+            ],
+            dtype=object,
+        )
+        return ctx, fields
+
+    # Last fallback: reconstruct from derived keys if present, else zeros.
+    def get1(key: str) -> np.ndarray:
+        if key in data.files:
+            return data[key].astype(np.float32).reshape(n, 1)
+        return np.zeros((n, 1), dtype=np.float32)
+
+    if "derived__goal_rel_body_from_odom_yaw" in data.files:
+        goal_rel = data["derived__goal_rel_body_from_odom_yaw"].astype(np.float32)
+    else:
+        goal_rel = np.zeros((n, 2), dtype=np.float32)
+    if "derived__depth_sector_min" in data.files:
+        depth3 = data["derived__depth_sector_min"].astype(np.float32)
+    else:
+        depth3 = np.zeros((n, 3), dtype=np.float32)
+
+    ctx = np.concatenate(
+        [
+            goal_rel,
+            get1("derived__goal_dist"),
+            get1("derived__goal_heading_err_from_odom_yaw"),
+            depth3,
+            get1("derived__free_corridor_width"),
+            get1("derived__depth_collision_flag"),
+            get1("derived__touch_flag"),
+        ],
+        axis=1,
+    ).astype(np.float32)
+    fields = np.array(
+        [
+            "goal_rel_body_x",
+            "goal_rel_body_y",
+            "goal_dist",
+            "goal_heading_err",
+            "depth_lf_min",
+            "depth_f_min",
+            "depth_rf_min",
+            "free_corridor_width",
+            "depth_collision_flag",
+            "touch_flag",
+        ],
+        dtype=object,
+    )
+    return ctx, fields
+
+
 def load_transitions_from_converted(
     path: Path,
     label_source: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Mapping[str, object]]:
+) -> Tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    Mapping[str, object],
+]:
     data = np.load(path, allow_pickle=True)
     meta = read_npz_meta(data)
     assert_meta_contract(meta)
@@ -37,6 +192,7 @@ def load_transitions_from_converted(
 
     x = data["icode__x_t"].astype(np.float32)
     u = data["icode__u_t"].astype(np.float32)
+    ctx, ctx_fields = build_context_from_converted(data=data, n=x.shape[0])
     ep = data["raw__episode"].astype(np.int32)
     if label_source == "gt_state":
         if "icode__x_label_t" in data.files:
@@ -78,10 +234,13 @@ def load_transitions_from_converted(
         return (
             np.zeros((0, x.shape[1]), dtype=np.float32),
             np.zeros((0, u.shape[1]), dtype=np.float32),
+            np.zeros((0, ctx.shape[1]), dtype=np.float32),
             np.zeros((0, x.shape[1]), dtype=np.float32),
             np.zeros((0,), dtype=np.float32),
             np.zeros((0,), dtype=np.float32),
             np.zeros((0,), dtype=np.uint8),
+            np.zeros((0,), dtype=np.int64),
+            ctx_fields,
             meta,
         )
 
@@ -98,7 +257,9 @@ def load_transitions_from_converted(
 
     x_t = x[:-1][valid]
     u_t = u[:-1][valid]
+    ctx_t = ctx[:-1][valid]
     x_tp1 = x_label[1:][valid]
+    ep_t = ep[:-1][valid].astype(np.int64)
 
     if "icode__obs_dist_t" in data.files:
         obs_dist = data["icode__obs_dist_t"].astype(np.float32)
@@ -115,66 +276,102 @@ def load_transitions_from_converted(
     else:
         dt = np.zeros((x_t.shape[0],), dtype=np.float32)
 
-    return x_t, u_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, meta
-
-
-def safe_std(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    s = a.std(axis=0)
-    s[s < eps] = eps
-    return s
+    return x_t, u_t, ctx_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, ep_t, ctx_fields, meta
 
 
 def build_dataset(args: argparse.Namespace) -> None:
     xs: List[np.ndarray] = []
     us: List[np.ndarray] = []
+    ctxs: List[np.ndarray] = []
     ys: List[np.ndarray] = []
     dts: List[np.ndarray] = []
     obs_dists: List[np.ndarray] = []
     obs_valids: List[np.ndarray] = []
+    episode_ids: List[np.ndarray] = []
     metas: List[Mapping[str, object]] = []
+    ctx_fields_ref: np.ndarray | None = None
 
-    for p in args.inputs:
-        x_t, u_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, meta = load_transitions_from_converted(
+    for file_idx, p in enumerate(args.inputs):
+        x_t, u_t, ctx_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, ep_t, ctx_fields, meta = load_transitions_from_converted(
             p,
             label_source=str(args.label_source),
         )
         print(f"Loaded {p}: transitions={x_t.shape[0]}")
         metas.append(meta)
+        if ctx_fields_ref is None:
+            ctx_fields_ref = ctx_fields
+        else:
+            if ctx_fields_ref.shape != ctx_fields.shape or np.any(ctx_fields_ref != ctx_fields):
+                raise RuntimeError(f"Context fields mismatch in {p}")
         if x_t.shape[0] == 0:
             continue
         xs.append(x_t)
         us.append(u_t)
+        ctxs.append(ctx_t)
         ys.append(x_tp1)
         dts.append(dt)
         obs_dists.append(obs_dist_tp1)
         obs_valids.append(obs_dist_valid)
+        episode_ids.append(ep_t + np.int64(file_idx) * np.int64(10_000_000))
 
     if not xs:
         raise RuntimeError("No valid transitions loaded from inputs.")
     merged_meta = merge_and_validate_meta(metas)
+    if ctx_fields_ref is None:
+        raise RuntimeError("No context fields inferred from inputs.")
 
     x_all = np.concatenate(xs, axis=0)
     u_all = np.concatenate(us, axis=0)
+    ctx_all = np.concatenate(ctxs, axis=0)
     y_all = np.concatenate(ys, axis=0)
     dt_all = np.concatenate(dts, axis=0)
     obs_dist_all = np.concatenate(obs_dists, axis=0)
     obs_valid_all = np.concatenate(obs_valids, axis=0)
+    ep_all = np.concatenate(episode_ids, axis=0)
     dx_all = y_all - x_all
 
     n = x_all.shape[0]
     rng = np.random.default_rng(args.seed)
-    perm = rng.permutation(n)
+    split_by = str(args.split_by)
+    if split_by == "episode":
+        eps = np.unique(ep_all)
+        eps_perm = rng.permutation(eps)
+        ep_n = eps_perm.shape[0]
+        train_ep_n = int(ep_n * args.train_ratio)
+        val_ep_n = int(ep_n * args.val_ratio)
+        test_ep_n = ep_n - train_ep_n - val_ep_n
 
-    train_n = int(n * args.train_ratio)
-    val_n = int(n * args.val_ratio)
-    test_n = n - train_n - val_n
+        train_eps = eps_perm[:train_ep_n]
+        val_eps = eps_perm[train_ep_n : train_ep_n + val_ep_n]
+        test_eps = eps_perm[train_ep_n + val_ep_n :]
 
-    train_idx = perm[:train_n]
-    val_idx = perm[train_n : train_n + val_n]
-    test_idx = perm[train_n + val_n :]
+        train_idx = np.where(np.isin(ep_all, train_eps))[0]
+        val_idx = np.where(np.isin(ep_all, val_eps))[0]
+        test_idx = np.where(np.isin(ep_all, test_eps))[0]
+        split_episodes = {
+            "train": int(train_ep_n),
+            "val": int(val_ep_n),
+            "test": int(test_ep_n),
+            "total": int(ep_n),
+        }
+    else:
+        perm = rng.permutation(n)
+        train_n = int(n * args.train_ratio)
+        val_n = int(n * args.val_ratio)
+        test_n = n - train_n - val_n
+        train_idx = perm[:train_n]
+        val_idx = perm[train_n : train_n + val_n]
+        test_idx = perm[train_n + val_n :]
+        split_episodes = {
+            "train": int(-1),
+            "val": int(-1),
+            "test": int(-1),
+            "total": int(-1),
+        }
 
     x_train = x_all[train_idx]
     u_train = u_all[train_idx]
+    ctx_train = ctx_all[train_idx]
     y_train = y_all[train_idx]
     dx_train = dx_all[train_idx]
     dt_train = dt_all[train_idx]
@@ -183,6 +380,7 @@ def build_dataset(args: argparse.Namespace) -> None:
 
     x_val = x_all[val_idx]
     u_val = u_all[val_idx]
+    ctx_val = ctx_all[val_idx]
     y_val = y_all[val_idx]
     dx_val = dx_all[val_idx]
     dt_val = dt_all[val_idx]
@@ -191,6 +389,7 @@ def build_dataset(args: argparse.Namespace) -> None:
 
     x_test = x_all[test_idx]
     u_test = u_all[test_idx]
+    ctx_test = ctx_all[test_idx]
     y_test = y_all[test_idx]
     dx_test = dx_all[test_idx]
     dt_test = dt_all[test_idx]
@@ -201,6 +400,8 @@ def build_dataset(args: argparse.Namespace) -> None:
     x_std = safe_std(x_train)
     u_mean = u_train.mean(axis=0)
     u_std = safe_std(u_train)
+    ctx_mean = ctx_train.mean(axis=0)
+    ctx_std = safe_std(ctx_train)
     y_mean = y_train.mean(axis=0)
     y_std = safe_std(y_train)
     dx_mean = dx_train.mean(axis=0)
@@ -214,11 +415,17 @@ def build_dataset(args: argparse.Namespace) -> None:
         "meta__seed": np.array([args.seed], dtype=np.int32),
         "meta__split_ratio": np.array([args.train_ratio, args.val_ratio, 1.0 - args.train_ratio - args.val_ratio], dtype=np.float32),
         "meta__num_total": np.array([n], dtype=np.int32),
-        "meta__num_train": np.array([train_n], dtype=np.int32),
-        "meta__num_val": np.array([val_n], dtype=np.int32),
-        "meta__num_test": np.array([test_n], dtype=np.int32),
+        "meta__num_train": np.array([int(train_idx.shape[0])], dtype=np.int32),
+        "meta__num_val": np.array([int(val_idx.shape[0])], dtype=np.int32),
+        "meta__num_test": np.array([int(test_idx.shape[0])], dtype=np.int32),
+        "meta__split_by": np.array([split_by], dtype=object),
+        "meta__num_train_episodes": np.array([split_episodes["train"]], dtype=np.int32),
+        "meta__num_val_episodes": np.array([split_episodes["val"]], dtype=np.int32),
+        "meta__num_test_episodes": np.array([split_episodes["test"]], dtype=np.int32),
+        "meta__num_total_episodes": np.array([split_episodes["total"]], dtype=np.int32),
         "meta__x_fields": np.array(["x_odom", "y_odom", "psi_odom", "v_body", "wz_body", "dqL", "dqR"], dtype=object),
         "meta__u_fields": np.array(["u_0", "u_1"], dtype=object),
+        "meta__ctx_fields": np.array(ctx_fields_ref, dtype=object),
         "meta__state_convention_version": np.array([str(merged_meta["meta__state_convention_version"].reshape(-1)[0])], dtype=object),
         "meta__drive_sign": np.array([float(merged_meta["meta__drive_sign"].reshape(-1)[0])], dtype=np.float32),
         "meta__pose_source": np.array([str(merged_meta["meta__pose_source"].reshape(-1)[0])], dtype=object),
@@ -227,6 +434,7 @@ def build_dataset(args: argparse.Namespace) -> None:
         "meta__label_source": np.array([str(args.label_source)], dtype=object),
         "train__x_t": x_train,
         "train__u_t": u_train,
+        "train__ctx_t": ctx_train,
         "train__x_tp1": y_train,
         "train__dx_t": dx_train,
         "train__dt": dt_train,
@@ -234,6 +442,7 @@ def build_dataset(args: argparse.Namespace) -> None:
         "train__obs_dist_valid": obs_valid_train,
         "val__x_t": x_val,
         "val__u_t": u_val,
+        "val__ctx_t": ctx_val,
         "val__x_tp1": y_val,
         "val__dx_t": dx_val,
         "val__dt": dt_val,
@@ -241,6 +450,7 @@ def build_dataset(args: argparse.Namespace) -> None:
         "val__obs_dist_valid": obs_valid_val,
         "test__x_t": x_test,
         "test__u_t": u_test,
+        "test__ctx_t": ctx_test,
         "test__x_tp1": y_test,
         "test__dx_t": dx_test,
         "test__dt": dt_test,
@@ -250,6 +460,8 @@ def build_dataset(args: argparse.Namespace) -> None:
         "stats__x_std": x_std.astype(np.float32),
         "stats__u_mean": u_mean.astype(np.float32),
         "stats__u_std": u_std.astype(np.float32),
+        "stats__ctx_mean": ctx_mean.astype(np.float32),
+        "stats__ctx_std": ctx_std.astype(np.float32),
         "stats__y_mean": y_mean.astype(np.float32),
         "stats__y_std": y_std.astype(np.float32),
         "stats__dx_mean": dx_mean.astype(np.float32),
@@ -258,7 +470,11 @@ def build_dataset(args: argparse.Namespace) -> None:
 
     np.savez_compressed(args.output, **save_dict)
     print(f"Saved ICODE training bundle to: {args.output}")
-    print(f"Total transitions: {n} (train={train_n}, val={val_n}, test={test_n})")
+    print(
+        f"Total transitions: {n} "
+        f"(train={train_idx.shape[0]}, val={val_idx.shape[0]}, test={test_idx.shape[0]}) "
+        f"| split_by={split_by}"
+    )
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -274,6 +490,13 @@ def build_argparser() -> argparse.ArgumentParser:
         default="state_est",
         choices=("state_est", "gt_state"),
         help="Supervision target source for x(t+1): state_est (legacy) or gt_state.",
+    )
+    parser.add_argument(
+        "--split-by",
+        type=str,
+        default="episode",
+        choices=("episode", "transition"),
+        help="Dataset split granularity.",
     )
     return parser
 

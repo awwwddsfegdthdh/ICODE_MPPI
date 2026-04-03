@@ -420,7 +420,9 @@ def main() -> None:
         str(float(prepare_args.get("val_ratio", 0.1))),
     ]
     label_source = str(prepare_args.get("label_source", "state_est"))
+    split_by = str(prepare_args.get("split_by", "episode"))
     prepare_cmd.extend(["--label-source", label_source])
+    prepare_cmd.extend(["--split-by", split_by])
 
     if not args.skip_prepare:
         print(f"[plan] build bundle from {len(converted_files)} converted shards")
@@ -461,6 +463,7 @@ def main() -> None:
             "train_ratio": float(prepare_args.get("train_ratio", 0.8)),
             "val_ratio": float(prepare_args.get("val_ratio", 0.1)),
             "label_source": label_source,
+            "split_by": split_by,
         },
         "profiles": manifest_profiles,
         "converted_files": [str(p) for p in converted_files],
