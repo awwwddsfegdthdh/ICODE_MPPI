@@ -420,6 +420,7 @@ def init_storage(
         "corridor_width": np.zeros((total_steps,), dtype=np.float32),
         "sensor_collision_flag": np.zeros((total_steps,), dtype=np.float32),
         "recover_trigger": np.zeros((total_steps,), dtype=np.uint8),
+        "post_collision_random_applied": np.zeros((total_steps,), dtype=np.uint8),
         "base_pos_gt": np.zeros((total_steps, 3), dtype=np.float32),
         "base_quat_gt": np.zeros((total_steps, 4), dtype=np.float32),
         "base_linvel_gt": np.zeros((total_steps, 3), dtype=np.float32),
@@ -625,45 +626,52 @@ def collect_dataset(args: argparse.Namespace) -> None:
         ds["episode_layout_success"][ep] = np.uint8(layout_success)
 
         held_action = rng.uniform(ctrl_low, ctrl_high).astype(np.float32)
+        post_collision_random_countdown = 0
         for step in range(args.horizon):
-            if args.control_mode == "iid":
+            apply_post_collision_random = post_collision_random_countdown > 0
+            if apply_post_collision_random:
                 action = rng.uniform(ctrl_low, ctrl_high).astype(np.float32)
-            elif args.control_mode == "expert":
-                base_pos_now = sensor_value(model, data, "base_pos_gt").astype(np.float32)
-                base_quat_now = sensor_value(model, data, "base_quat_gt").astype(np.float32)
-                goal_pos_now = sensor_value(model, data, "goal_pos_gt").astype(np.float32)
-                lidar_now = np.array(
-                    [
-                        sensor_value(model, data, "lidar_left30")[0],
-                        sensor_value(model, data, "lidar_front")[0],
-                        sensor_value(model, data, "lidar_right30")[0],
-                    ],
-                    dtype=np.float32,
-                )
-                touch_now = float(sensor_value(model, data, "touch_front_force")[0])
-                action = expert_control_action(
-                    base_pos=base_pos_now,
-                    base_quat_wxyz=base_quat_now,
-                    goal_pos=goal_pos_now,
-                    lidar_triplet=lidar_now,
-                    touch_force=touch_now,
-                    prev_action=held_action,
-                    ctrl_low=ctrl_low,
-                    ctrl_high=ctrl_high,
-                    args=args,
-                )
                 held_action = action
+                post_collision_random_countdown -= 1
             else:
-                if step == 0:
-                    action = held_action
+                if args.control_mode == "iid":
+                    action = rng.uniform(ctrl_low, ctrl_high).astype(np.float32)
+                elif args.control_mode == "expert":
+                    base_pos_now = sensor_value(model, data, "base_pos_gt").astype(np.float32)
+                    base_quat_now = sensor_value(model, data, "base_quat_gt").astype(np.float32)
+                    goal_pos_now = sensor_value(model, data, "goal_pos_gt").astype(np.float32)
+                    lidar_now = np.array(
+                        [
+                            sensor_value(model, data, "lidar_left30")[0],
+                            sensor_value(model, data, "lidar_front")[0],
+                            sensor_value(model, data, "lidar_right30")[0],
+                        ],
+                        dtype=np.float32,
+                    )
+                    touch_now = float(sensor_value(model, data, "touch_front_force")[0])
+                    action = expert_control_action(
+                        base_pos=base_pos_now,
+                        base_quat_wxyz=base_quat_now,
+                        goal_pos=goal_pos_now,
+                        lidar_triplet=lidar_now,
+                        touch_force=touch_now,
+                        prev_action=held_action,
+                        ctrl_low=ctrl_low,
+                        ctrl_high=ctrl_high,
+                        args=args,
+                    )
+                    held_action = action
                 else:
-                    if step % max(1, args.ctrl_hold_steps) == 0:
-                        span = ctrl_high - ctrl_low
-                        noise = rng.normal(0.0, args.ctrl_noise_std, size=model.nu).astype(np.float32)
-                        held_action = np.clip(held_action + noise * span, ctrl_low, ctrl_high).astype(np.float32)
-                        if rng.uniform() < args.ctrl_resample_prob:
-                            held_action = rng.uniform(ctrl_low, ctrl_high).astype(np.float32)
-                    action = held_action
+                    if step == 0:
+                        action = held_action
+                    else:
+                        if step % max(1, args.ctrl_hold_steps) == 0:
+                            span = ctrl_high - ctrl_low
+                            noise = rng.normal(0.0, args.ctrl_noise_std, size=model.nu).astype(np.float32)
+                            held_action = np.clip(held_action + noise * span, ctrl_low, ctrl_high).astype(np.float32)
+                            if rng.uniform() < args.ctrl_resample_prob:
+                                held_action = rng.uniform(ctrl_low, ctrl_high).astype(np.float32)
+                        action = held_action
             data.ctrl[:] = action
             mujoco.mj_step(model, data)
 
@@ -775,6 +783,14 @@ def collect_dataset(args: argparse.Namespace) -> None:
             ds["corridor_width"][index] = corridor_width
             ds["sensor_collision_flag"][index] = coll_flag
             ds["recover_trigger"][index] = np.uint8(1 if recover_flag else 0)
+            ds["post_collision_random_applied"][index] = np.uint8(1 if apply_post_collision_random else 0)
+
+            if (
+                args.post_collision_random_steps > 0
+                and (coll_flag > 0.5 or recover_flag)
+                and (rng.uniform() <= args.post_collision_random_prob)
+            ):
+                post_collision_random_countdown = max(post_collision_random_countdown, int(args.post_collision_random_steps))
 
             index += 1
 
@@ -808,6 +824,8 @@ def collect_dataset(args: argparse.Namespace) -> None:
         "meta__expert_w_max": np.array([args.expert_w_max], dtype=np.float32),
         "meta__sensor_collision_threshold": np.array([args.sensor_collision_threshold], dtype=np.float32),
         "meta__recover_front_threshold": np.array([args.recover_front_threshold], dtype=np.float32),
+        "meta__post_collision_random_steps": np.array([args.post_collision_random_steps], dtype=np.int32),
+        "meta__post_collision_random_prob": np.array([args.post_collision_random_prob], dtype=np.float32),
         "meta__min_active_obstacles": np.array([args.min_active_obstacles], dtype=np.int32),
         "meta__max_active_obstacles": np.array([args.max_active_obstacles], dtype=np.int32),
         "meta__obs_size_xy_scale_range": np.array(args.obs_size_xy_scale_range, dtype=np.float32),
@@ -854,6 +872,7 @@ def collect_dataset(args: argparse.Namespace) -> None:
         "raw__corridor_width": ds["corridor_width"],
         "raw__sensor_collision_flag": ds["sensor_collision_flag"],
         "raw__recover_trigger": ds["recover_trigger"],
+        "raw__post_collision_random_applied": ds["post_collision_random_applied"],
         "gt__base_pos_gt": ds["base_pos_gt"],
         "gt__base_quat_gt": ds["base_quat_gt"],
         "gt__base_linvel_gt": ds["base_linvel_gt"],
@@ -932,6 +951,18 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--expert-action-smoothing", type=float, default=0.45)
     parser.add_argument("--sensor-collision-threshold", type=float, default=0.30)
     parser.add_argument("--recover-front-threshold", type=float, default=0.25)
+    parser.add_argument(
+        "--post-collision-random-steps",
+        type=int,
+        default=0,
+        help="After near-collision/touch trigger, force IID random controls for this many subsequent steps.",
+    )
+    parser.add_argument(
+        "--post-collision-random-prob",
+        type=float,
+        default=1.0,
+        help="Trigger probability for post-collision random-control segment.",
+    )
 
     parser.add_argument("--scene-layout-attempts", type=int, default=120)
     parser.add_argument("--scene-sample-attempts", type=int, default=180)

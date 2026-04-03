@@ -41,16 +41,17 @@ class TransitionDataset(Dataset):
 
 
 class RolloutWindowDataset(Dataset):
-    def __init__(self, x_windows: np.ndarray, u_windows: np.ndarray):
-        # x_windows: [N, K+1, D], u_windows: [N, K, U]
-        self.x_windows = torch.from_numpy(x_windows.astype(np.float32))
+    def __init__(self, x0: np.ndarray, u_windows: np.ndarray, y_windows: np.ndarray):
+        # x0: [N, D], u_windows: [N, K, U], y_windows: [N, K, D]
+        self.x0 = torch.from_numpy(x0.astype(np.float32))
         self.u_windows = torch.from_numpy(u_windows.astype(np.float32))
+        self.y_windows = torch.from_numpy(y_windows.astype(np.float32))
 
     def __len__(self) -> int:
-        return self.x_windows.shape[0]
+        return self.x0.shape[0]
 
     def __getitem__(self, idx: int):
-        return self.x_windows[idx], self.u_windows[idx]
+        return self.x0[idx], self.u_windows[idx], self.y_windows[idx]
 
 
 def set_seed(seed: int) -> None:
@@ -76,6 +77,53 @@ def build_amp_context(device: torch.device, amp_dtype):
     if amp_dtype is not None and device.type == "cuda":
         return torch.autocast(device_type="cuda", dtype=amp_dtype)
     return nullcontext()
+
+
+def build_state_loss_weights(args: argparse.Namespace, device: torch.device) -> torch.Tensor:
+    w = torch.ones((int(args.state_dim),), dtype=torch.float32, device=device)
+    if w.shape[0] > 2:
+        w[2] = float(args.yaw_loss_weight)
+    if w.shape[0] > 4:
+        w[4] = float(args.wz_loss_weight)
+    return w
+
+
+def quat_wxyz_to_yaw_batch(quat_wxyz: np.ndarray) -> np.ndarray:
+    w = quat_wxyz[:, 0]
+    x = quat_wxyz[:, 1]
+    y = quat_wxyz[:, 2]
+    z = quat_wxyz[:, 3]
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return np.arctan2(siny_cosp, cosy_cosp).astype(np.float32)
+
+
+def world_to_body_x(v_world_xy: np.ndarray, yaw: np.ndarray) -> np.ndarray:
+    c = np.cos(yaw)
+    s = np.sin(yaw)
+    return (c * v_world_xy[:, 0] + s * v_world_xy[:, 1]).astype(np.float32)
+
+
+def build_gt_state_labels_or_none(d: np.lib.npyio.NpzFile, x_fallback: np.ndarray) -> Optional[np.ndarray]:
+    required = ("gt__base_pos_gt", "gt__base_quat_gt", "gt__base_linvel_gt", "gt__base_angvel_gt")
+    if not all(k in d.files for k in required):
+        return None
+
+    base_pos = d["gt__base_pos_gt"].astype(np.float32)
+    base_quat = d["gt__base_quat_gt"].astype(np.float32)
+    base_linvel = d["gt__base_linvel_gt"].astype(np.float32)
+    base_angvel = d["gt__base_angvel_gt"].astype(np.float32)
+    yaw_gt = quat_wxyz_to_yaw_batch(base_quat)
+    v_body_gt = world_to_body_x(base_linvel[:, :2], yaw_gt)
+    wz_gt = base_angvel[:, 2].astype(np.float32)
+    if x_fallback.shape[1] >= 7:
+        dq_l = x_fallback[:, 5].astype(np.float32)
+        dq_r = x_fallback[:, 6].astype(np.float32)
+    else:
+        dq_l = np.zeros((x_fallback.shape[0],), dtype=np.float32)
+        dq_r = np.zeros((x_fallback.shape[0],), dtype=np.float32)
+    out = np.stack([base_pos[:, 0], base_pos[:, 1], yaw_gt, v_body_gt, wz_gt, dq_l, dq_r], axis=1).astype(np.float32)
+    return out
 
 
 def evaluate_loader(
@@ -168,6 +216,20 @@ def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndar
     x = d["icode__x_t"].astype(np.float32)
     u = d["icode__u_t"].astype(np.float32)
     ep = d["raw__episode"].astype(np.int32)
+    if "icode__x_label_t" in d.files:
+        x_label = d["icode__x_label_t"].astype(np.float32)
+        if "icode__x_label_valid" in d.files:
+            x_label_valid = d["icode__x_label_valid"].astype(np.uint8)
+        else:
+            x_label_valid = np.ones((x_label.shape[0],), dtype=np.uint8)
+    else:
+        x_label_from_gt = build_gt_state_labels_or_none(d=d, x_fallback=x)
+        if x_label_from_gt is not None:
+            x_label = x_label_from_gt
+            x_label_valid = np.all(np.isfinite(x_label), axis=1).astype(np.uint8)
+        else:
+            x_label = x
+            x_label_valid = np.ones((x.shape[0],), dtype=np.uint8)
     gt_pos = d["gt__base_pos_gt"].astype(np.float32)
     gt_ang = d["gt__base_angvel_gt"].astype(np.float32)
 
@@ -176,10 +238,11 @@ def load_gt_transition_eval(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndar
         valid = (ep[1:] == ep[:-1]) & (step[1:] == step[:-1] + 1)
     else:
         valid = ep[1:] == ep[:-1]
+    valid = valid & (x_label_valid[:-1] > 0) & (x_label_valid[1:] > 0)
 
     x_t = x[:-1][valid]
     u_t = u[:-1][valid]
-    x_tp1 = x[1:][valid]
+    x_tp1 = x_label[1:][valid]
     gt_xy_tp1 = gt_pos[1:, :2][valid]
     gt_wz_tp1 = gt_ang[1:, 2][valid]
     ep_tp1 = ep[1:][valid]
@@ -313,9 +376,11 @@ def build_rollout_windows_from_paths(
     rollout_steps: int,
     max_windows: int,
     seed: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-    x_windows = []
+    supervision_source: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    x0_windows = []
     u_windows = []
+    y_windows = []
 
     for p in paths:
         d = np.load(p, allow_pickle=True)
@@ -325,6 +390,24 @@ def build_rollout_windows_from_paths(
                 raise KeyError(f"{p} missing {key}")
 
         x = d["icode__x_t"].astype(np.float32)
+        if supervision_source == "gt_state":
+            if "icode__x_label_t" in d.files:
+                y_ref = d["icode__x_label_t"].astype(np.float32)
+                if "icode__x_label_valid" in d.files:
+                    y_valid = d["icode__x_label_valid"].astype(np.uint8)
+                else:
+                    y_valid = np.ones((x.shape[0],), dtype=np.uint8)
+            else:
+                y_ref_from_gt = build_gt_state_labels_or_none(d=d, x_fallback=x)
+                if y_ref_from_gt is None:
+                    raise KeyError(
+                        f"{p} missing icode__x_label_t and GT keys needed for rollout supervision gt_state"
+                    )
+                y_ref = y_ref_from_gt
+                y_valid = np.all(np.isfinite(y_ref), axis=1).astype(np.uint8)
+        else:
+            y_ref = x
+            y_valid = np.ones((x.shape[0],), dtype=np.uint8)
         u = d["icode__u_t"].astype(np.float32)
         ep = d["raw__episode"].astype(np.int32)
         step = d["raw__step"].astype(np.int32) if "raw__step" in d.files else None
@@ -344,34 +427,46 @@ def build_rollout_windows_from_paths(
                             seq_arr = np.array(seq_idx, dtype=np.int32)
                             for s in range(0, len(seq_arr) - rollout_steps):
                                 w = seq_arr[s : s + rollout_steps + 1]
-                                x_windows.append(x[w])
-                                u_windows.append(u[w[:-1]])
+                                if np.all(y_valid[w] > 0):
+                                    x0_windows.append(x[w[0]])
+                                    u_windows.append(u[w[:-1]])
+                                    y_windows.append(y_ref[w[1:]])
                         seq_idx = [ii]
                 if len(seq_idx) > rollout_steps:
                     seq_arr = np.array(seq_idx, dtype=np.int32)
                     for s in range(0, len(seq_arr) - rollout_steps):
                         w = seq_arr[s : s + rollout_steps + 1]
-                        x_windows.append(x[w])
-                        u_windows.append(u[w[:-1]])
+                        if np.all(y_valid[w] > 0):
+                            x0_windows.append(x[w[0]])
+                            u_windows.append(u[w[:-1]])
+                            y_windows.append(y_ref[w[1:]])
             else:
                 for s in range(0, idx.shape[0] - rollout_steps):
                     w = idx[s : s + rollout_steps + 1]
-                    x_windows.append(x[w])
-                    u_windows.append(u[w[:-1]])
+                    if np.all(y_valid[w] > 0):
+                        x0_windows.append(x[w[0]])
+                        u_windows.append(u[w[:-1]])
+                        y_windows.append(y_ref[w[1:]])
 
-    if not x_windows:
-        return np.zeros((0, rollout_steps + 1, 7), dtype=np.float32), np.zeros((0, rollout_steps, 2), dtype=np.float32)
+    if not x0_windows:
+        return (
+            np.zeros((0, 7), dtype=np.float32),
+            np.zeros((0, rollout_steps, 2), dtype=np.float32),
+            np.zeros((0, rollout_steps, 7), dtype=np.float32),
+        )
 
-    x_arr = np.stack(x_windows, axis=0)
+    x0_arr = np.stack(x0_windows, axis=0)
     u_arr = np.stack(u_windows, axis=0)
+    y_arr = np.stack(y_windows, axis=0)
 
-    if max_windows > 0 and x_arr.shape[0] > max_windows:
+    if max_windows > 0 and x0_arr.shape[0] > max_windows:
         rng = np.random.default_rng(seed)
-        choose = rng.choice(x_arr.shape[0], size=max_windows, replace=False)
-        x_arr = x_arr[choose]
+        choose = rng.choice(x0_arr.shape[0], size=max_windows, replace=False)
+        x0_arr = x0_arr[choose]
         u_arr = u_arr[choose]
+        y_arr = y_arr[choose]
 
-    return x_arr, u_arr
+    return x0_arr, u_arr, y_arr
 
 
 def cycle_loader(loader: DataLoader) -> Iterator:
@@ -452,21 +547,25 @@ def load_checkpoint_if_requested(
 
 def compute_rollout_loss(
     model: torch.nn.Module,
-    x_window: torch.Tensor,
+    x0: torch.Tensor,
     u_window: torch.Tensor,
+    y_window: torch.Tensor,
     y_std: torch.Tensor,
+    state_loss_weights: torch.Tensor,
     late_bias: float,
     terminal_weight: float,
 ) -> torch.Tensor:
-    # x_window: [B, K+1, D], u_window: [B, K, U]
-    x_pred = x_window[:, 0, :]
+    # x0: [B, D], u_window: [B, K, U], y_window: [B, K, D]
+    x_pred = x0
     losses = []
     steps = u_window.shape[1]
     for t in range(steps):
         x_pred = model(x_pred, u_window[:, t, :])
-        target = x_window[:, t + 1, :]
+        target = y_window[:, t, :]
         norm_err = (x_pred - target) / y_std
-        losses.append(torch.mean(norm_err * norm_err))
+        weighted = (norm_err * norm_err) * state_loss_weights
+        per_sample = torch.sum(weighted, dim=1) / torch.sum(state_loss_weights)
+        losses.append(torch.mean(per_sample))
     losses_t = torch.stack(losses)
     weights = torch.linspace(1.0, max(late_bias, 1.0), steps=steps, device=losses_t.device, dtype=losses_t.dtype)
     if steps > 0 and terminal_weight != 1.0:
@@ -560,14 +659,15 @@ def train(args: argparse.Namespace) -> None:
     rollout_iter = None
     if args.rollout_loss_weight > 0 and args.rollout_steps >= 2:
         rollout_paths = [Path(p) for p in args.rollout_train_inputs]
-        xw, uw = build_rollout_windows_from_paths(
+        x0w, uw, yw = build_rollout_windows_from_paths(
             paths=rollout_paths,
             rollout_steps=args.rollout_steps,
             max_windows=args.rollout_max_windows,
             seed=args.seed,
+            supervision_source=str(args.rollout_supervision_source),
         )
-        if xw.shape[0] > 0:
-            rollout_ds = RolloutWindowDataset(xw, uw)
+        if x0w.shape[0] > 0:
+            rollout_ds = RolloutWindowDataset(x0w, uw, yw)
             rollout_loader = DataLoader(
                 rollout_ds,
                 batch_size=args.rollout_batch_size,
@@ -579,11 +679,15 @@ def train(args: argparse.Namespace) -> None:
             )
             rollout_iter = cycle_loader(rollout_loader)
             print(
-                f"Rollout loss enabled: windows={xw.shape[0]}, steps={args.rollout_steps}, "
-                f"batch={args.rollout_batch_size}, weight={args.rollout_loss_weight}"
+                f"Rollout loss enabled: windows={x0w.shape[0]}, steps={args.rollout_steps}, "
+                f"batch={args.rollout_batch_size}, weight={args.rollout_loss_weight}, "
+                f"supervision={args.rollout_supervision_source}"
             )
         else:
-            print("Rollout loss requested but no valid windows found. Fallback to one-step only.")
+            print(
+                "Rollout loss requested but no valid windows found "
+                f"(source={args.rollout_supervision_source}). Fallback to one-step only."
+            )
 
     raw_model = ICODEDynamics(
         state_dim=args.state_dim,
@@ -631,6 +735,7 @@ def train(args: argparse.Namespace) -> None:
 
     y_std_np = bundle["stats__y_std"].astype(np.float32)
     y_std = torch.from_numpy(y_std_np).to(device)
+    state_loss_weights = build_state_loss_weights(args=args, device=device)
 
     save_dir = args.save_dir
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -676,6 +781,8 @@ def train(args: argparse.Namespace) -> None:
                 "hidden_dim": args.hidden_dim,
                 "num_layers": args.num_layers,
                 "dt": args.dt,
+                "yaw_loss_weight": float(args.yaw_loss_weight),
+                "wz_loss_weight": float(args.wz_loss_weight),
                 "predict_obs_distance": bool(predict_obs_distance_active),
                 "obs_head_hidden_dim": int(args.obs_head_hidden_dim),
                 "state_convention_version": str(bundle_meta["meta__state_convention_version"].reshape(-1)[0]),
@@ -725,18 +832,22 @@ def train(args: argparse.Namespace) -> None:
             with build_amp_context(device, amp_dtype) if use_amp else nullcontext():
                 pred = model(x_t, u_t)
                 norm_err = (pred - y_t) / y_std
-                one_step_loss = torch.mean(norm_err * norm_err)
+                one_step_weighted = (norm_err * norm_err) * state_loss_weights
+                one_step_loss = torch.mean(torch.sum(one_step_weighted, dim=1) / torch.sum(state_loss_weights))
 
                 rollout_loss = torch.tensor(0.0, device=device)
                 if rollout_iter is not None:
-                    xw, uw = next(rollout_iter)
-                    xw = xw.to(device, non_blocking=True)
+                    x0w, uw, yw = next(rollout_iter)
+                    x0w = x0w.to(device, non_blocking=True)
                     uw = uw.to(device, non_blocking=True)
+                    yw = yw.to(device, non_blocking=True)
                     rollout_loss = compute_rollout_loss(
                         model,
-                        xw,
+                        x0w,
                         uw,
+                        yw,
                         y_std=y_std,
+                        state_loss_weights=state_loss_weights,
                         late_bias=args.rollout_late_bias,
                         terminal_weight=args.rollout_terminal_weight,
                     )
@@ -885,6 +996,9 @@ def train(args: argparse.Namespace) -> None:
         "rollout_steps": args.rollout_steps,
         "rollout_late_bias": args.rollout_late_bias,
         "rollout_terminal_weight": args.rollout_terminal_weight,
+        "rollout_supervision_source": args.rollout_supervision_source,
+        "yaw_loss_weight": float(args.yaw_loss_weight),
+        "wz_loss_weight": float(args.wz_loss_weight),
         "predict_obs_distance": bool(predict_obs_distance_active),
         "obs_dist_loss_weight": float(args.obs_dist_loss_weight),
         "ema_decay": args.ema_decay,
@@ -973,11 +1087,20 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--obs-head-hidden-dim", type=int, default=128)
     parser.add_argument("--obs-dist-loss-weight", type=float, default=0.20)
     parser.add_argument("--grad-clip", type=float, default=5.0)
+    parser.add_argument("--yaw-loss-weight", type=float, default=1.0)
+    parser.add_argument("--wz-loss-weight", type=float, default=1.0)
 
     parser.add_argument("--rollout-loss-weight", type=float, default=0.15)
     parser.add_argument("--rollout-steps", type=int, default=8)
     parser.add_argument("--rollout-batch-size", type=int, default=8192)
     parser.add_argument("--rollout-max-windows", type=int, default=120000)
+    parser.add_argument(
+        "--rollout-supervision-source",
+        type=str,
+        default="state_est",
+        choices=("state_est", "gt_state"),
+        help="Target source for rollout supervision windows.",
+    )
     parser.add_argument("--rollout-late-bias", type=float, default=1.5)
     parser.add_argument("--rollout-terminal-weight", type=float, default=2.0)
 

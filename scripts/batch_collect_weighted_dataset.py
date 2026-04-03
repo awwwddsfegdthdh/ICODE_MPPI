@@ -419,6 +419,8 @@ def main() -> None:
         "--val-ratio",
         str(float(prepare_args.get("val_ratio", 0.1))),
     ]
+    label_source = str(prepare_args.get("label_source", "state_est"))
+    prepare_cmd.extend(["--label-source", label_source])
 
     if not args.skip_prepare:
         print(f"[plan] build bundle from {len(converted_files)} converted shards")
@@ -458,6 +460,7 @@ def main() -> None:
             "seed": int(prepare_args.get("seed", 42)),
             "train_ratio": float(prepare_args.get("train_ratio", 0.8)),
             "val_ratio": float(prepare_args.get("val_ratio", 0.1)),
+            "label_source": label_source,
         },
         "profiles": manifest_profiles,
         "converted_files": [str(p) for p in converted_files],

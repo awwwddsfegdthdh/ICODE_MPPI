@@ -6,8 +6,25 @@ import numpy as np
 from state_convention import assert_meta_contract, merge_and_validate_meta, read_npz_meta
 
 
+def quat_wxyz_to_yaw_batch(quat_wxyz: np.ndarray) -> np.ndarray:
+    w = quat_wxyz[:, 0]
+    x = quat_wxyz[:, 1]
+    y = quat_wxyz[:, 2]
+    z = quat_wxyz[:, 3]
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return np.arctan2(siny_cosp, cosy_cosp).astype(np.float32)
+
+
+def world_to_body_x(v_world_xy: np.ndarray, yaw: np.ndarray) -> np.ndarray:
+    c = np.cos(yaw)
+    s = np.sin(yaw)
+    return (c * v_world_xy[:, 0] + s * v_world_xy[:, 1]).astype(np.float32)
+
+
 def load_transitions_from_converted(
     path: Path,
+    label_source: str,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Mapping[str, object]]:
     data = np.load(path, allow_pickle=True)
     meta = read_npz_meta(data)
@@ -21,6 +38,41 @@ def load_transitions_from_converted(
     x = data["icode__x_t"].astype(np.float32)
     u = data["icode__u_t"].astype(np.float32)
     ep = data["raw__episode"].astype(np.int32)
+    if label_source == "gt_state":
+        if "icode__x_label_t" in data.files:
+            x_label = data["icode__x_label_t"].astype(np.float32)
+            if "icode__x_label_valid" in data.files:
+                x_label_valid = data["icode__x_label_valid"].astype(np.uint8)
+            else:
+                x_label_valid = np.ones((x_label.shape[0],), dtype=np.uint8)
+        else:
+            required_gt = ("gt__base_pos_gt", "gt__base_quat_gt", "gt__base_linvel_gt", "gt__base_angvel_gt")
+            if not all(k in data.files for k in required_gt):
+                raise KeyError(
+                    f"{path} missing icode__x_label_t and required GT keys {required_gt} "
+                    "for label_source=gt_state"
+                )
+            base_pos = data["gt__base_pos_gt"].astype(np.float32)
+            base_quat = data["gt__base_quat_gt"].astype(np.float32)
+            base_linvel = data["gt__base_linvel_gt"].astype(np.float32)
+            base_angvel = data["gt__base_angvel_gt"].astype(np.float32)
+            yaw_gt = quat_wxyz_to_yaw_batch(base_quat)
+            v_body_gt = world_to_body_x(base_linvel[:, :2], yaw_gt)
+            wz_gt = base_angvel[:, 2].astype(np.float32)
+            if x.shape[1] >= 7:
+                dq_l = x[:, 5].astype(np.float32)
+                dq_r = x[:, 6].astype(np.float32)
+            else:
+                dq_l = np.zeros((x.shape[0],), dtype=np.float32)
+                dq_r = np.zeros((x.shape[0],), dtype=np.float32)
+            x_label = np.stack(
+                [base_pos[:, 0], base_pos[:, 1], yaw_gt, v_body_gt, wz_gt, dq_l, dq_r],
+                axis=1,
+            ).astype(np.float32)
+            x_label_valid = np.all(np.isfinite(x_label), axis=1).astype(np.uint8)
+    else:
+        x_label = x
+        x_label_valid = np.ones((x.shape[0],), dtype=np.uint8)
 
     if x.shape[0] < 2:
         return (
@@ -42,9 +94,11 @@ def load_transitions_from_converted(
     else:
         valid = same_episode
 
+    valid = valid & (x_label_valid[:-1] > 0) & (x_label_valid[1:] > 0)
+
     x_t = x[:-1][valid]
     u_t = u[:-1][valid]
-    x_tp1 = x[1:][valid]
+    x_tp1 = x_label[1:][valid]
 
     if "icode__obs_dist_t" in data.files:
         obs_dist = data["icode__obs_dist_t"].astype(np.float32)
@@ -80,7 +134,10 @@ def build_dataset(args: argparse.Namespace) -> None:
     metas: List[Mapping[str, object]] = []
 
     for p in args.inputs:
-        x_t, u_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, meta = load_transitions_from_converted(p)
+        x_t, u_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, meta = load_transitions_from_converted(
+            p,
+            label_source=str(args.label_source),
+        )
         print(f"Loaded {p}: transitions={x_t.shape[0]}")
         metas.append(meta)
         if x_t.shape[0] == 0:
@@ -167,6 +224,7 @@ def build_dataset(args: argparse.Namespace) -> None:
         "meta__pose_source": np.array([str(merged_meta["meta__pose_source"].reshape(-1)[0])], dtype=object),
         "meta__heading_source": np.array([str(merged_meta["meta__heading_source"].reshape(-1)[0])], dtype=object),
         "meta__control_definition": np.array([str(merged_meta["meta__control_definition"].reshape(-1)[0])], dtype=object),
+        "meta__label_source": np.array([str(args.label_source)], dtype=object),
         "train__x_t": x_train,
         "train__u_t": u_train,
         "train__x_tp1": y_train,
@@ -210,6 +268,13 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
+    parser.add_argument(
+        "--label-source",
+        type=str,
+        default="state_est",
+        choices=("state_est", "gt_state"),
+        help="Supervision target source for x(t+1): state_est (legacy) or gt_state.",
+    )
     return parser
 
 

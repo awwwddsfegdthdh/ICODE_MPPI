@@ -24,6 +24,16 @@ def sanitize_ranges(ranges: np.ndarray, default_far: float) -> np.ndarray:
     return out
 
 
+def quat_wxyz_to_yaw_batch(quat_wxyz: np.ndarray) -> np.ndarray:
+    w = quat_wxyz[:, 0]
+    x = quat_wxyz[:, 1]
+    y = quat_wxyz[:, 2]
+    z = quat_wxyz[:, 3]
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return np.arctan2(siny_cosp, cosy_cosp).astype(np.float32)
+
+
 def get_array_or_default(
     src: np.lib.npyio.NpzFile,
     key: str,
@@ -253,6 +263,31 @@ def convert_dataset(args: argparse.Namespace) -> None:
     camera_pos_gt = get_array_or_default(src, "gt__camera_pos_gt", (n, 3), np.float32)
     camera_quat_gt = get_array_or_default(src, "gt__camera_quat_gt", (n, 4), np.float32)
 
+    has_gt_state_labels = all(
+        k in src.files for k in ("gt__base_pos_gt", "gt__base_quat_gt", "gt__base_linvel_gt", "gt__base_angvel_gt")
+    )
+    if has_gt_state_labels:
+        psi_gt = wrap_to_pi(quat_wxyz_to_yaw_batch(base_quat_gt)).astype(np.float32)
+        v_body_gt_xy = _world_to_body_batch(base_linvel_gt[:, :2], psi_gt)
+        v_body_gt = v_body_gt_xy[:, 0].astype(np.float32)
+        wz_gt = base_angvel_gt[:, 2].astype(np.float32)
+        supervision_state_t = np.stack(
+            [
+                base_pos_gt[:, 0].astype(np.float32),
+                base_pos_gt[:, 1].astype(np.float32),
+                psi_gt,
+                v_body_gt,
+                wz_gt,
+                dq_l.astype(np.float32),
+                dq_r.astype(np.float32),
+            ],
+            axis=1,
+        ).astype(np.float32)
+        supervision_state_valid = np.all(np.isfinite(supervision_state_t), axis=1).astype(np.uint8)
+    else:
+        supervision_state_t = state_est.copy()
+        supervision_state_valid = np.zeros((n,), dtype=np.uint8)
+
     output_parent = args.output.parent
     output_parent.mkdir(parents=True, exist_ok=True)
 
@@ -287,6 +322,8 @@ def convert_dataset(args: argparse.Namespace) -> None:
             dtype=object,
         ),
         "meta__icode_aux_fields": np.array(["obs_dist_min_next"], dtype=object),
+        "meta__supervision_state_fields": np.array(["x_gt", "y_gt", "psi_gt", "v_body_gt", "wz_gt", "dqL", "dqR"], dtype=object),
+        "meta__has_gt_state_labels": np.array([1 if has_gt_state_labels else 0], dtype=np.uint8),
         # raw layer
         "raw__episode": raw_episode,
         "raw__step": raw_step,
@@ -315,8 +352,12 @@ def convert_dataset(args: argparse.Namespace) -> None:
         "gt__camera_quat_gt": camera_quat_gt,
         "gt__target_pos_gt": target_pos_gt,
         "gt__obs_pos_gt": obs_pos_gt,
+        "supervision_gt__state_t": supervision_state_t,
+        "supervision_gt__state_valid": supervision_state_valid,
         # ICODE/MPPI ready tensors
         "icode__x_t": icode_x_t,
+        "icode__x_label_t": supervision_state_t.astype(np.float32),
+        "icode__x_label_valid": supervision_state_valid.astype(np.uint8),
         "icode__u_t": icode_u_t,
         "icode__obs_dist_t": obs_dist_min.astype(np.float32),
         "mppi__state_t": mppi_state_t,
