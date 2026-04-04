@@ -74,6 +74,16 @@ def load_icode_checkpoint(ckpt_path: Path, device: torch.device) -> ICODEDynamic
         obs_head_hidden_dim=int(cfg.get("obs_head_hidden_dim", 128)),
     ).to(device)
     model.load_state_dict(ckpt["model_state_dict"], strict=True)
+    if bool(cfg.get("input_norm_enabled", False)):
+        model.set_input_normalization(
+            x_mean=cfg.get("x_mean", [0.0] * int(cfg.get("state_dim", 7))),
+            x_std=cfg.get("x_std", [1.0] * int(cfg.get("state_dim", 7))),
+            u_mean=cfg.get("u_mean", [0.0] * int(cfg.get("action_dim", 2))),
+            u_std=cfg.get("u_std", [1.0] * int(cfg.get("action_dim", 2))),
+            ctx_mean=cfg.get("ctx_mean", [0.0] * int(cfg.get("context_dim", 0))),
+            ctx_std=cfg.get("ctx_std", [1.0] * int(cfg.get("context_dim", 0))),
+            enabled=True,
+        )
     model.eval()
     return model
 
@@ -86,6 +96,7 @@ class HybridDynamics(torch.nn.Module):
         self.alpha = float(np.clip(alpha, 0.0, 1.0))
         self.state_dim = int(getattr(icode_model, "state_dim", 7))
         self.action_dim = int(getattr(icode_model, "action_dim", 2))
+        self.context_dim = int(getattr(icode_model, "context_dim", 0))
 
     def forward(self, x: torch.Tensor, u: torch.Tensor, ctx: torch.Tensor | None = None) -> torch.Tensor:
         x_i = self.icode(x, u, ctx)
@@ -96,6 +107,58 @@ class HybridDynamics(torch.nn.Module):
         if hasattr(self.icode, "predict_obstacle_distance"):
             return self.icode.predict_obstacle_distance(x, u, ctx)
         raise AttributeError("Underlying ICODE model does not expose predict_obstacle_distance().")
+
+
+def _align_ctx_dim(ctx_vec: np.ndarray, target_dim: int) -> np.ndarray:
+    c = np.asarray(ctx_vec, dtype=np.float32).reshape(-1)
+    if target_dim <= 0:
+        return np.zeros((0,), dtype=np.float32)
+    if c.shape[0] == target_dim:
+        return c.astype(np.float32)
+    if c.shape[0] > target_dim:
+        return c[:target_dim].astype(np.float32)
+    pad = np.zeros((target_dim - c.shape[0],), dtype=np.float32)
+    return np.concatenate([c, pad], axis=0).astype(np.float32)
+
+
+def _build_icode_sensor_ctx(
+    goal_body_now: np.ndarray,
+    dist_goal_now: float,
+    sector_now: np.ndarray,
+    corridor_width_now: float,
+    min_clearance_now: float,
+    touch_now: float,
+    sensor_collision_threshold: float,
+    touch_threshold: float,
+) -> np.ndarray:
+    gb = np.asarray(goal_body_now, dtype=np.float32).reshape(-1)
+    gx = float(gb[0]) if gb.shape[0] > 0 else 0.0
+    gy = float(gb[1]) if gb.shape[0] > 1 else 0.0
+    heading_err = float(np.arctan2(gy, max(gx, 1e-6)))
+    sec = np.asarray(sector_now, dtype=np.float32).reshape(-1)
+    if sec.shape[0] < 3:
+        pad = np.full((3 - sec.shape[0],), float(max(min_clearance_now, 0.0)), dtype=np.float32)
+        sec = np.concatenate([sec, pad], axis=0)
+    depth_lf = float(sec[0])
+    depth_f = float(sec[1])
+    depth_rf = float(sec[2])
+    depth_collision_flag = 1.0 if float(min_clearance_now) < float(sensor_collision_threshold) else 0.0
+    touch_flag = 1.0 if float(touch_now) > float(touch_threshold) else 0.0
+    return np.array(
+        [
+            gx,
+            gy,
+            float(dist_goal_now),
+            heading_err,
+            depth_lf,
+            depth_f,
+            depth_rf,
+            float(corridor_width_now),
+            float(depth_collision_flag),
+            float(touch_flag),
+        ],
+        dtype=np.float32,
+    )
 
 
 def _adaptive_profile(mode: str) -> dict:
@@ -667,6 +730,7 @@ def run_episode(args: argparse.Namespace) -> dict:
             model.eval()
         else:
             model = icode_model
+    model_context_dim = int(getattr(model, "context_dim", 0))
     env = E1RobotEnv(
         xml_path=str(args.xml),
         wheel_radius=args.wheel_radius,
@@ -2164,6 +2228,20 @@ def run_episode(args: argparse.Namespace) -> dict:
                     forward_only=bool(args.reference_tracker_forward_only),
                     min_forward_v=float(args.reference_tracker_min_v),
                 )
+            if model_context_dim > 0:
+                ctx_now = _build_icode_sensor_ctx(
+                    goal_body_now=np.asarray(goal_body_now, dtype=np.float32),
+                    dist_goal_now=float(dist_goal_now),
+                    sector_now=np.asarray(sector_now, dtype=np.float32),
+                    corridor_width_now=float(corridor_width_now),
+                    min_clearance_now=float(pre_min_clearance),
+                    touch_now=float(touch_now),
+                    sensor_collision_threshold=float(args.sensor_collision_threshold),
+                    touch_threshold=float(args.sup_touch_threshold),
+                )
+                mppi.set_model_context(_align_ctx_dim(ctx_now, target_dim=model_context_dim))
+            else:
+                mppi.set_model_context(None)
             action = mppi.get_action(
                 initial_state=state,
                 target=target_for_mppi,

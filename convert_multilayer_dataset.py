@@ -561,6 +561,7 @@ def convert_dataset(args: argparse.Namespace) -> None:
         "raw__corridor_width",
         "raw__sensor_collision_flag",
         "raw__recover_trigger",
+        "raw__post_collision_random_applied",
     ):
         if k in src.files:
             save_dict[k] = src[k]

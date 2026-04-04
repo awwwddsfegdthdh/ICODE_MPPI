@@ -271,6 +271,7 @@ class MPPIController:
             "terminal": 0.0,
             "total": 0.0,
         }
+        self._model_context: Optional[torch.Tensor] = None
 
     def _project_forward_only_controls(self, u: torch.Tensor) -> torch.Tensor:
         if (not self.enforce_forward_only) or u.shape[-1] != 2:
@@ -290,6 +291,51 @@ class MPPIController:
         dq_rn = v_term + w_term
         dq_ln = v_term - w_term
         return torch.stack([dq_ln, dq_rn], dim=-1)
+
+    def set_model_context(self, context) -> None:
+        if context is None:
+            self._model_context = None
+            return
+        ctx = torch.as_tensor(context, dtype=torch.float32, device=self.device)
+        if ctx.ndim not in (1, 2, 3):
+            raise ValueError(f"model context must have ndim in (1,2,3), got {ctx.ndim}")
+        self._model_context = ctx
+
+    def _context_for_step(self, batch_size: int, step_idx: int) -> Optional[torch.Tensor]:
+        ctx = self._model_context
+        if ctx is None:
+            return None
+        if ctx.ndim == 1:
+            return ctx.view(1, -1).repeat(batch_size, 1)
+        if ctx.ndim == 2:
+            if ctx.shape[0] == batch_size:
+                return ctx
+            return ctx[:1, :].repeat(batch_size, 1)
+        t = int(np.clip(step_idx, 0, max(ctx.shape[1] - 1, 0)))
+        if ctx.shape[0] == batch_size:
+            return ctx[:, t, :]
+        return ctx[:1, t, :].repeat(batch_size, 1)
+
+    def _model_forward(self, x: torch.Tensor, u: torch.Tensor, ctx: Optional[torch.Tensor]) -> torch.Tensor:
+        if ctx is not None:
+            try:
+                return self.model(x, u, ctx)
+            except TypeError:
+                pass
+        return self.model(x, u)
+
+    def _model_predict_obstacle_distance(
+        self,
+        x: torch.Tensor,
+        u: torch.Tensor,
+        ctx: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if ctx is not None:
+            try:
+                return self.model.predict_obstacle_distance(x, u, ctx)
+            except TypeError:
+                pass
+        return self.model.predict_obstacle_distance(x, u)
 
     def compute_cost(
         self,
@@ -571,13 +617,18 @@ class MPPIController:
         x = init_state
         with torch.no_grad():
             for t in range(self.T):
+                ctx_t = self._context_for_step(batch_size=self.K, step_idx=t)
                 if pred_obs is not None:
                     try:
-                        d_pred = self.model.predict_obstacle_distance(x, u_samples[:, t, :]).to(torch.float32)
+                        d_pred = self._model_predict_obstacle_distance(
+                            x=x,
+                            u=u_samples[:, t, :],
+                            ctx=ctx_t,
+                        ).to(torch.float32)
                         pred_obs[:, t] = torch.clamp(d_pred, min=0.0, max=self.pred_obs_clip_max)
                     except Exception:
                         pred_obs = None
-                x = self.model(x, u_samples[:, t, :])
+                x = self._model_forward(x=x, u=u_samples[:, t, :], ctx=ctx_t)
                 states[:, t, :] = x
         return states, pred_obs
 

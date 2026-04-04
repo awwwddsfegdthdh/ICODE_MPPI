@@ -31,6 +31,8 @@ from mppi_nav_utils import (
 from run_icode_mppi_e1_test import (
     DEFAULT_XML,
     HybridDynamics,
+    _align_ctx_dim,
+    _build_icode_sensor_ctx,
     _fuse_obstacle_sets,
     _lidar_sector_min,
     _lidar_triplet_from_scan,
@@ -659,6 +661,7 @@ def main() -> None:
             model.eval()
         else:
             model = icode_model
+    model_context_dim = int(getattr(model, "context_dim", 0))
 
     env = E1RobotEnv(
         xml_path=str(args.xml),
@@ -2208,6 +2211,20 @@ def main() -> None:
                         forward_only=bool(args.reference_tracker_forward_only),
                         min_forward_v=float(args.reference_tracker_min_v),
                     )
+                if model_context_dim > 0:
+                    ctx_now = _build_icode_sensor_ctx(
+                        goal_body_now=np.asarray(goal_body_now, dtype=np.float32),
+                        dist_goal_now=float(dist_goal_now),
+                        sector_now=np.asarray(sector_now, dtype=np.float32),
+                        corridor_width_now=float(corridor_width_now),
+                        min_clearance_now=float(pre_min_clearance),
+                        touch_now=float(touch_now),
+                        sensor_collision_threshold=float(args.sensor_collision_threshold),
+                        touch_threshold=float(args.sup_touch_threshold),
+                    )
+                    mppi.set_model_context(_align_ctx_dim(ctx_now, target_dim=model_context_dim))
+                else:
+                    mppi.set_model_context(None)
                 action = mppi.get_action(
                     initial_state=state,
                     target=target_for_mppi,

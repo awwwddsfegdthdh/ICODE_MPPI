@@ -10,7 +10,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from icode_dynamics import ICODEDynamics
 from state_convention import assert_meta_contract, read_npz_meta
@@ -90,6 +90,64 @@ def build_state_loss_weights(args: argparse.Namespace, device: torch.device) -> 
     if w.shape[0] > 4:
         w[4] = float(args.wz_loss_weight)
     return w
+
+
+def wrap_angle_torch(a: torch.Tensor) -> torch.Tensor:
+    return torch.atan2(torch.sin(a), torch.cos(a))
+
+
+def normalized_state_error(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    y_std: torch.Tensor,
+    yaw_index: int = 2,
+) -> torch.Tensor:
+    err = pred - target
+    if err.ndim == 2 and err.shape[1] > yaw_index:
+        yaw_err = wrap_angle_torch(err[:, yaw_index : yaw_index + 1])
+        left = err[:, :yaw_index] if yaw_index > 0 else None
+        right = err[:, yaw_index + 1 :] if (yaw_index + 1) < err.shape[1] else None
+        parts = []
+        if left is not None and left.shape[1] > 0:
+            parts.append(left)
+        parts.append(yaw_err)
+        if right is not None and right.shape[1] > 0:
+            parts.append(right)
+        err = torch.cat(parts, dim=1)
+    return err / y_std
+
+
+def obstacle_distance_loss(
+    pred_obs: torch.Tensor,
+    target_obs: torch.Tensor,
+    near_weight: float,
+    near_scale: float,
+    use_log_target: bool,
+) -> torch.Tensor:
+    pred_c = torch.clamp(pred_obs, min=0.0)
+    tgt_c = torch.clamp(target_obs, min=0.0)
+    if use_log_target:
+        pred_e = torch.log1p(pred_c)
+        tgt_e = torch.log1p(tgt_c)
+    else:
+        pred_e = pred_c
+        tgt_e = tgt_c
+    base = F.smooth_l1_loss(pred_e, tgt_e, reduction="none")
+    scale = max(float(near_scale), 1e-6)
+    w = 1.0 + float(max(0.0, near_weight)) * torch.exp(-tgt_c / scale)
+    return torch.sum(base * w) / torch.sum(w)
+
+
+def effective_rollout_steps_for_epoch(args: argparse.Namespace, epoch: int, start_epoch: int) -> int:
+    max_steps = int(max(1, args.rollout_steps))
+    min_steps = int(np.clip(args.rollout_curriculum_min_steps, 1, max_steps))
+    warmup = int(max(0, args.rollout_curriculum_warmup_epochs))
+    if warmup <= 0 or min_steps >= max_steps:
+        return max_steps
+    rel = int(max(0, epoch - start_epoch))
+    frac = float(np.clip(rel / max(warmup, 1), 0.0, 1.0))
+    out = int(round(min_steps + frac * float(max_steps - min_steps)))
+    return int(np.clip(out, min_steps, max_steps))
 
 
 def quat_wxyz_to_yaw_batch(quat_wxyz: np.ndarray) -> np.ndarray:
@@ -249,7 +307,7 @@ def evaluate_loader(
 
             with build_amp_context(device, amp_dtype):
                 pred = model(x_t, u_t, c_t)
-                norm_err = (pred - y_t) / y_std
+                norm_err = normalized_state_error(pred=pred, target=y_t, y_std=y_std)
                 norm_mse = torch.mean(norm_err * norm_err)
 
             mse = F.mse_loss(pred, y_t, reduction="sum")
@@ -681,15 +739,16 @@ def compute_rollout_loss(
     state_loss_weights: torch.Tensor,
     late_bias: float,
     terminal_weight: float,
+    effective_steps: int,
 ) -> torch.Tensor:
     # x0: [B, D], u_window: [B, K, U], y_window: [B, K, D], c_window: [B, K, C]
     x_pred = x0
     losses = []
-    steps = u_window.shape[1]
+    steps = int(max(1, min(u_window.shape[1], effective_steps)))
     for t in range(steps):
         x_pred = model(x_pred, u_window[:, t, :], c_window[:, t, :])
         target = y_window[:, t, :]
-        norm_err = (x_pred - target) / y_std
+        norm_err = normalized_state_error(pred=x_pred, target=target, y_std=y_std)
         weighted = (norm_err * norm_err) * state_loss_weights
         per_sample = torch.sum(weighted, dim=1) / torch.sum(state_loss_weights)
         losses.append(torch.mean(per_sample))
@@ -765,11 +824,33 @@ def train(args: argparse.Namespace) -> None:
 
     pin_memory = device.type == "cuda"
     persistent_workers = args.num_workers > 0
+    train_sampler = None
+    train_shuffle = True
+    if bool(args.train_weighted_sampling) and ("train__sample_weight" in bundle.files):
+        w_np = bundle["train__sample_weight"].astype(np.float64).reshape(-1)
+        w_np = np.where(np.isfinite(w_np) & (w_np > 0.0), w_np, 1.0)
+        if w_np.shape[0] == len(train_ds):
+            train_sampler = WeightedRandomSampler(
+                weights=torch.from_numpy(w_np),
+                num_samples=int(w_np.shape[0]),
+                replacement=True,
+            )
+            train_shuffle = False
+            print(
+                "Train weighted sampler enabled: "
+                f"n={w_np.shape[0]}, mean={float(np.mean(w_np)):.3f}, max={float(np.max(w_np)):.3f}"
+            )
+        else:
+            print(
+                "Train weighted sampler requested but weight length mismatch: "
+                f"weights={w_np.shape[0]} vs dataset={len(train_ds)}. Fallback to shuffle."
+            )
 
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=train_shuffle,
+        sampler=train_sampler,
         num_workers=args.num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
@@ -839,6 +920,21 @@ def train(args: argparse.Namespace) -> None:
         predict_obs_distance=predict_obs_distance_active,
         obs_head_hidden_dim=args.obs_head_hidden_dim,
     ).to(device)
+    x_mean_np = bundle["stats__x_mean"].astype(np.float32) if "stats__x_mean" in bundle.files else np.zeros((args.state_dim,), dtype=np.float32)
+    x_std_np = bundle["stats__x_std"].astype(np.float32) if "stats__x_std" in bundle.files else np.ones((args.state_dim,), dtype=np.float32)
+    u_mean_np = bundle["stats__u_mean"].astype(np.float32) if "stats__u_mean" in bundle.files else np.zeros((args.action_dim,), dtype=np.float32)
+    u_std_np = bundle["stats__u_std"].astype(np.float32) if "stats__u_std" in bundle.files else np.ones((args.action_dim,), dtype=np.float32)
+    ctx_mean_np = bundle["stats__ctx_mean"].astype(np.float32) if "stats__ctx_mean" in bundle.files else np.zeros((context_dim,), dtype=np.float32)
+    ctx_std_np = bundle["stats__ctx_std"].astype(np.float32) if "stats__ctx_std" in bundle.files else np.ones((context_dim,), dtype=np.float32)
+    raw_model.set_input_normalization(
+        x_mean=x_mean_np,
+        x_std=x_std_np,
+        u_mean=u_mean_np,
+        u_std=u_std_np,
+        ctx_mean=ctx_mean_np,
+        ctx_std=ctx_std_np,
+        enabled=bool(args.input_normalize),
+    )
 
     model = raw_model
     if args.compile_mode != "none":
@@ -927,6 +1023,13 @@ def train(args: argparse.Namespace) -> None:
                 "wz_loss_weight": float(args.wz_loss_weight),
                 "predict_obs_distance": bool(predict_obs_distance_active),
                 "obs_head_hidden_dim": int(args.obs_head_hidden_dim),
+                "input_norm_enabled": bool(args.input_normalize),
+                "x_mean": x_mean_np.astype(np.float32).tolist(),
+                "x_std": x_std_np.astype(np.float32).tolist(),
+                "u_mean": u_mean_np.astype(np.float32).tolist(),
+                "u_std": u_std_np.astype(np.float32).tolist(),
+                "ctx_mean": ctx_mean_np.astype(np.float32).tolist(),
+                "ctx_std": ctx_std_np.astype(np.float32).tolist(),
                 "state_convention_version": str(bundle_meta["meta__state_convention_version"].reshape(-1)[0]),
                 "drive_sign": float(bundle_meta["meta__drive_sign"].reshape(-1)[0]),
                 "pose_source": str(bundle_meta["meta__pose_source"].reshape(-1)[0]),
@@ -956,6 +1059,7 @@ def train(args: argparse.Namespace) -> None:
         total_obs_loss_sum = 0.0
         total_obs_count = 0
         total_samples = 0
+        epoch_rollout_steps = effective_rollout_steps_for_epoch(args=args, epoch=epoch, start_epoch=start_epoch)
 
         for batch in train_loader:
             if len(batch) == 6:
@@ -974,7 +1078,7 @@ def train(args: argparse.Namespace) -> None:
             optimizer.zero_grad(set_to_none=True)
             with build_amp_context(device, amp_dtype) if use_amp else nullcontext():
                 pred = model(x_t, u_t, c_t)
-                norm_err = (pred - y_t) / y_std
+                norm_err = normalized_state_error(pred=pred, target=y_t, y_std=y_std)
                 one_step_weighted = (norm_err * norm_err) * state_loss_weights
                 one_step_loss = torch.mean(torch.sum(one_step_weighted, dim=1) / torch.sum(state_loss_weights))
 
@@ -995,6 +1099,7 @@ def train(args: argparse.Namespace) -> None:
                         state_loss_weights=state_loss_weights,
                         late_bias=args.rollout_late_bias,
                         terminal_weight=args.rollout_terminal_weight,
+                        effective_steps=epoch_rollout_steps,
                     )
 
                 obs_dist_loss = torch.tensor(0.0, device=device)
@@ -1003,7 +1108,13 @@ def train(args: argparse.Namespace) -> None:
                     mask = obs_valid > 0
                     if torch.any(mask):
                         pred_obs = raw_model.predict_obstacle_distance(x_t, u_t, c_t)
-                        obs_dist_loss = F.smooth_l1_loss(pred_obs[mask], obs_t[mask])
+                        obs_dist_loss = obstacle_distance_loss(
+                            pred_obs=pred_obs[mask],
+                            target_obs=obs_t[mask],
+                            near_weight=float(args.obs_dist_near_weight),
+                            near_scale=float(args.obs_dist_near_scale),
+                            use_log_target=bool(args.obs_dist_use_log_target),
+                        )
                         obs_count = int(mask.sum().item())
 
                 loss = (
@@ -1075,6 +1186,7 @@ def train(args: argparse.Namespace) -> None:
                 f"Epoch {epoch:04d} | train_norm_mse={train_norm_mse:.6f} "
                 f"| train_rollout_mse={train_rollout_mse:.6f} "
                 f"| train_obs={train_obs_dist_loss:.6f} "
+                f"| rollout_steps_eff={int(epoch_rollout_steps)} "
                 f"| val_norm_mse={val_metrics['norm_mse']:.6f} | val_rmse={val_metrics['rmse']:.6f} "
                 f"| val_obs_rmse={val_metrics.get('obs_dist_rmse', float('nan')):.6f} "
                 f"| samples/s={history['samples_per_s'][-1]:.1f} | lr={cur_lr:.2e}"
@@ -1132,6 +1244,7 @@ def train(args: argparse.Namespace) -> None:
         "device": str(device),
         "epochs": args.epochs,
         "batch_size": args.batch_size,
+        "train_weighted_sampling": bool(args.train_weighted_sampling),
         "context_dim": int(context_dim),
         "lr": args.lr,
         "weight_decay": args.weight_decay,
@@ -1139,8 +1252,11 @@ def train(args: argparse.Namespace) -> None:
         "scheduler": args.scheduler,
         "amp": args.amp,
         "compile_mode": args.compile_mode,
+        "input_normalize": bool(args.input_normalize),
         "rollout_loss_weight": args.rollout_loss_weight,
         "rollout_steps": args.rollout_steps,
+        "rollout_curriculum_min_steps": int(args.rollout_curriculum_min_steps),
+        "rollout_curriculum_warmup_epochs": int(args.rollout_curriculum_warmup_epochs),
         "rollout_late_bias": args.rollout_late_bias,
         "rollout_terminal_weight": args.rollout_terminal_weight,
         "rollout_supervision_source": args.rollout_supervision_source,
@@ -1148,6 +1264,9 @@ def train(args: argparse.Namespace) -> None:
         "wz_loss_weight": float(args.wz_loss_weight),
         "predict_obs_distance": bool(predict_obs_distance_active),
         "obs_dist_loss_weight": float(args.obs_dist_loss_weight),
+        "obs_dist_near_weight": float(args.obs_dist_near_weight),
+        "obs_dist_near_scale": float(args.obs_dist_near_scale),
+        "obs_dist_use_log_target": bool(args.obs_dist_use_log_target),
         "ema_decay": args.ema_decay,
         "ema_eval": args.ema_eval,
         "best_val_norm_mse": best_val_norm_mse,
@@ -1212,6 +1331,9 @@ def build_argparser() -> argparse.ArgumentParser:
 
     parser.add_argument("--batch-size", type=int, default=98304)
     parser.add_argument("--num-workers", type=int, default=6)
+    parser.add_argument("--train-weighted-sampling", dest="train_weighted_sampling", action="store_true")
+    parser.add_argument("--no-train-weighted-sampling", dest="train_weighted_sampling", action="store_false")
+    parser.set_defaults(train_weighted_sampling=True)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--optimizer", type=str, default="adamw", choices=("adamw", "adam"))
@@ -1231,8 +1353,16 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--predict-obs-distance", dest="predict_obs_distance", action="store_true")
     parser.add_argument("--no-predict-obs-distance", dest="predict_obs_distance", action="store_false")
     parser.set_defaults(predict_obs_distance=True)
+    parser.add_argument("--input-normalize", dest="input_normalize", action="store_true")
+    parser.add_argument("--no-input-normalize", dest="input_normalize", action="store_false")
+    parser.set_defaults(input_normalize=True)
     parser.add_argument("--obs-head-hidden-dim", type=int, default=128)
     parser.add_argument("--obs-dist-loss-weight", type=float, default=0.20)
+    parser.add_argument("--obs-dist-near-weight", type=float, default=2.0)
+    parser.add_argument("--obs-dist-near-scale", type=float, default=0.35)
+    parser.add_argument("--obs-dist-use-log-target", dest="obs_dist_use_log_target", action="store_true")
+    parser.add_argument("--no-obs-dist-use-log-target", dest="obs_dist_use_log_target", action="store_false")
+    parser.set_defaults(obs_dist_use_log_target=True)
     parser.add_argument("--grad-clip", type=float, default=5.0)
     parser.add_argument("--yaw-loss-weight", type=float, default=1.0)
     parser.add_argument("--wz-loss-weight", type=float, default=1.0)
@@ -1241,6 +1371,8 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--rollout-steps", type=int, default=8)
     parser.add_argument("--rollout-batch-size", type=int, default=8192)
     parser.add_argument("--rollout-max-windows", type=int, default=120000)
+    parser.add_argument("--rollout-curriculum-min-steps", type=int, default=3)
+    parser.add_argument("--rollout-curriculum-warmup-epochs", type=int, default=80)
     parser.add_argument(
         "--rollout-supervision-source",
         type=str,

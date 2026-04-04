@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import List, Mapping, Tuple
+from typing import Dict, List, Mapping, Tuple
 
 import numpy as np
 from state_convention import assert_meta_contract, merge_and_validate_meta, read_npz_meta
@@ -26,6 +26,42 @@ def safe_std(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     s = a.std(axis=0)
     s[s < eps] = eps
     return s
+
+
+def compute_train_sample_weights(
+    near_clearance: np.ndarray,
+    recover_flag: np.ndarray,
+    wz_abs: np.ndarray,
+    near_thr: float,
+    high_wz_thr: float,
+    w_near: float,
+    w_recover: float,
+    w_high_wz: float,
+    w_max: float,
+) -> Tuple[np.ndarray, Dict[str, float], Dict[str, np.ndarray]]:
+    near_mask = np.isfinite(near_clearance) & (near_clearance <= float(near_thr))
+    recover_mask = recover_flag > 0.5
+    high_wz_mask = wz_abs >= float(high_wz_thr)
+
+    w = np.ones((near_clearance.shape[0],), dtype=np.float32)
+    w *= np.where(near_mask, float(max(1.0, w_near)), 1.0).astype(np.float32)
+    w *= np.where(recover_mask, float(max(1.0, w_recover)), 1.0).astype(np.float32)
+    w *= np.where(high_wz_mask, float(max(1.0, w_high_wz)), 1.0).astype(np.float32)
+    w = np.clip(w, 1.0, float(max(1.0, w_max))).astype(np.float32)
+
+    summary = {
+        "near_ratio": float(np.mean(near_mask.astype(np.float32))) if near_mask.size > 0 else 0.0,
+        "recover_ratio": float(np.mean(recover_mask.astype(np.float32))) if recover_mask.size > 0 else 0.0,
+        "high_wz_ratio": float(np.mean(high_wz_mask.astype(np.float32))) if high_wz_mask.size > 0 else 0.0,
+        "weight_mean": float(np.mean(w)) if w.size > 0 else 1.0,
+        "weight_max": float(np.max(w)) if w.size > 0 else 1.0,
+    }
+    tags = {
+        "near_mask": near_mask.astype(np.uint8),
+        "recover_mask": recover_mask.astype(np.uint8),
+        "high_wz_mask": high_wz_mask.astype(np.uint8),
+    }
+    return w, summary, tags
 
 
 def build_context_from_converted(data: np.lib.npyio.NpzFile, n: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -179,6 +215,9 @@ def load_transitions_from_converted(
     np.ndarray,
     np.ndarray,
     np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
     Mapping[str, object],
 ]:
     data = np.load(path, allow_pickle=True)
@@ -194,6 +233,22 @@ def load_transitions_from_converted(
     u = data["icode__u_t"].astype(np.float32)
     ctx, ctx_fields = build_context_from_converted(data=data, n=x.shape[0])
     ep = data["raw__episode"].astype(np.int32)
+    if "raw__recover_trigger" in data.files:
+        recover_full = data["raw__recover_trigger"].astype(np.float32).reshape(-1)
+    else:
+        recover_full = np.zeros((x.shape[0],), dtype=np.float32)
+    if "raw__post_collision_random_applied" in data.files:
+        post_random_full = data["raw__post_collision_random_applied"].astype(np.float32).reshape(-1)
+        recover_full = np.maximum(recover_full, post_random_full)
+
+    if "derived__obs_gt_clear_min" in data.files:
+        clear_full = data["derived__obs_gt_clear_min"].astype(np.float32).reshape(-1)
+    elif "derived__depth_sector_min" in data.files:
+        clear_full = np.min(data["derived__depth_sector_min"].astype(np.float32), axis=1).astype(np.float32)
+    elif "icode__obs_dist_t" in data.files:
+        clear_full = data["icode__obs_dist_t"].astype(np.float32).reshape(-1)
+    else:
+        clear_full = np.full((x.shape[0],), 10.0, dtype=np.float32)
     if label_source == "gt_state":
         if "icode__x_label_t" in data.files:
             x_label = data["icode__x_label_t"].astype(np.float32)
@@ -240,6 +295,9 @@ def load_transitions_from_converted(
             np.zeros((0,), dtype=np.float32),
             np.zeros((0,), dtype=np.uint8),
             np.zeros((0,), dtype=np.int64),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
             ctx_fields,
             meta,
         )
@@ -260,6 +318,9 @@ def load_transitions_from_converted(
     ctx_t = ctx[:-1][valid]
     x_tp1 = x_label[1:][valid]
     ep_t = ep[:-1][valid].astype(np.int64)
+    recover_t = recover_full[:-1][valid].astype(np.float32)
+    clear_t = clear_full[:-1][valid].astype(np.float32)
+    wz_abs_t = np.abs(x_t[:, 4]).astype(np.float32) if x_t.shape[1] > 4 else np.zeros((x_t.shape[0],), dtype=np.float32)
 
     if "icode__obs_dist_t" in data.files:
         obs_dist = data["icode__obs_dist_t"].astype(np.float32)
@@ -276,7 +337,7 @@ def load_transitions_from_converted(
     else:
         dt = np.zeros((x_t.shape[0],), dtype=np.float32)
 
-    return x_t, u_t, ctx_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, ep_t, ctx_fields, meta
+    return x_t, u_t, ctx_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, ep_t, recover_t, wz_abs_t, clear_t, ctx_fields, meta
 
 
 def build_dataset(args: argparse.Namespace) -> None:
@@ -287,12 +348,15 @@ def build_dataset(args: argparse.Namespace) -> None:
     dts: List[np.ndarray] = []
     obs_dists: List[np.ndarray] = []
     obs_valids: List[np.ndarray] = []
+    recovers: List[np.ndarray] = []
+    wz_abses: List[np.ndarray] = []
+    clearances: List[np.ndarray] = []
     episode_ids: List[np.ndarray] = []
     metas: List[Mapping[str, object]] = []
     ctx_fields_ref: np.ndarray | None = None
 
     for file_idx, p in enumerate(args.inputs):
-        x_t, u_t, ctx_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, ep_t, ctx_fields, meta = load_transitions_from_converted(
+        x_t, u_t, ctx_t, x_tp1, dt, obs_dist_tp1, obs_dist_valid, ep_t, recover_t, wz_abs_t, clear_t, ctx_fields, meta = load_transitions_from_converted(
             p,
             label_source=str(args.label_source),
         )
@@ -312,6 +376,9 @@ def build_dataset(args: argparse.Namespace) -> None:
         dts.append(dt)
         obs_dists.append(obs_dist_tp1)
         obs_valids.append(obs_dist_valid)
+        recovers.append(recover_t)
+        wz_abses.append(wz_abs_t)
+        clearances.append(clear_t)
         episode_ids.append(ep_t + np.int64(file_idx) * np.int64(10_000_000))
 
     if not xs:
@@ -327,8 +394,55 @@ def build_dataset(args: argparse.Namespace) -> None:
     dt_all = np.concatenate(dts, axis=0)
     obs_dist_all = np.concatenate(obs_dists, axis=0)
     obs_valid_all = np.concatenate(obs_valids, axis=0)
+    recover_all = np.concatenate(recovers, axis=0)
+    wz_abs_all = np.concatenate(wz_abses, axis=0)
+    clear_all = np.concatenate(clearances, axis=0)
     ep_all = np.concatenate(episode_ids, axis=0)
     dx_all = y_all - x_all
+
+    # Automatic data cleaning (default on).
+    fail_non_finite = (
+        (~np.all(np.isfinite(x_all), axis=1))
+        | (~np.all(np.isfinite(u_all), axis=1))
+        | (~np.all(np.isfinite(ctx_all), axis=1))
+        | (~np.all(np.isfinite(y_all), axis=1))
+        | (~np.isfinite(dt_all))
+    )
+    fail_state_range = (
+        (np.abs(x_all[:, 3]) > float(args.clean_max_abs_v))
+        | (np.abs(y_all[:, 3]) > float(args.clean_max_abs_v))
+        | (np.abs(x_all[:, 4]) > float(args.clean_max_abs_wz))
+        | (np.abs(y_all[:, 4]) > float(args.clean_max_abs_wz))
+        | (np.abs(x_all[:, 5]) > float(args.clean_max_abs_wheel))
+        | (np.abs(x_all[:, 6]) > float(args.clean_max_abs_wheel))
+        | (np.abs(y_all[:, 5]) > float(args.clean_max_abs_wheel))
+        | (np.abs(y_all[:, 6]) > float(args.clean_max_abs_wheel))
+    )
+    fail_dt = np.zeros((dt_all.shape[0],), dtype=bool)
+    if bool(args.clean_enforce_dt_positive):
+        fail_dt = dt_all <= float(args.clean_min_dt)
+    else:
+        positive_dt = dt_all > 0.0
+        fail_dt = positive_dt & ((dt_all < float(args.clean_min_dt)) | (dt_all > float(args.clean_max_dt)))
+    fail_clear = ~np.isfinite(clear_all) | (clear_all < 0.0)
+
+    clean_keep = ~(fail_non_finite | fail_state_range | fail_dt | fail_clear)
+    n_raw = int(x_all.shape[0])
+    n_kept = int(np.sum(clean_keep))
+    if n_kept <= 0:
+        raise RuntimeError("Data cleaning removed all transitions; please relax clean thresholds.")
+    x_all = x_all[clean_keep]
+    u_all = u_all[clean_keep]
+    ctx_all = ctx_all[clean_keep]
+    y_all = y_all[clean_keep]
+    dt_all = dt_all[clean_keep]
+    obs_dist_all = obs_dist_all[clean_keep]
+    obs_valid_all = obs_valid_all[clean_keep]
+    recover_all = recover_all[clean_keep]
+    wz_abs_all = wz_abs_all[clean_keep]
+    clear_all = clear_all[clean_keep]
+    ep_all = ep_all[clean_keep]
+    dx_all = dx_all[clean_keep]
 
     n = x_all.shape[0]
     rng = np.random.default_rng(args.seed)
@@ -377,6 +491,9 @@ def build_dataset(args: argparse.Namespace) -> None:
     dt_train = dt_all[train_idx]
     obs_dist_train = obs_dist_all[train_idx]
     obs_valid_train = obs_valid_all[train_idx]
+    recover_train = recover_all[train_idx]
+    wz_abs_train = wz_abs_all[train_idx]
+    clear_train = clear_all[train_idx]
 
     x_val = x_all[val_idx]
     u_val = u_all[val_idx]
@@ -386,6 +503,9 @@ def build_dataset(args: argparse.Namespace) -> None:
     dt_val = dt_all[val_idx]
     obs_dist_val = obs_dist_all[val_idx]
     obs_valid_val = obs_valid_all[val_idx]
+    recover_val = recover_all[val_idx]
+    wz_abs_val = wz_abs_all[val_idx]
+    clear_val = clear_all[val_idx]
 
     x_test = x_all[test_idx]
     u_test = u_all[test_idx]
@@ -395,6 +515,21 @@ def build_dataset(args: argparse.Namespace) -> None:
     dt_test = dt_all[test_idx]
     obs_dist_test = obs_dist_all[test_idx]
     obs_valid_test = obs_valid_all[test_idx]
+    recover_test = recover_all[test_idx]
+    wz_abs_test = wz_abs_all[test_idx]
+    clear_test = clear_all[test_idx]
+
+    sample_w_train, sample_w_summary, sample_w_tags = compute_train_sample_weights(
+        near_clearance=clear_train,
+        recover_flag=recover_train,
+        wz_abs=wz_abs_train,
+        near_thr=float(args.weight_near_clearance_thr),
+        high_wz_thr=float(args.weight_high_wz_thr),
+        w_near=float(args.weight_near_factor),
+        w_recover=float(args.weight_recover_factor),
+        w_high_wz=float(args.weight_high_wz_factor),
+        w_max=float(args.weight_max),
+    )
 
     x_mean = x_train.mean(axis=0)
     x_std = safe_std(x_train)
@@ -415,6 +550,12 @@ def build_dataset(args: argparse.Namespace) -> None:
         "meta__seed": np.array([args.seed], dtype=np.int32),
         "meta__split_ratio": np.array([args.train_ratio, args.val_ratio, 1.0 - args.train_ratio - args.val_ratio], dtype=np.float32),
         "meta__num_total": np.array([n], dtype=np.int32),
+        "meta__num_total_before_clean": np.array([n_raw], dtype=np.int32),
+        "meta__num_removed_by_clean": np.array([n_raw - n_kept], dtype=np.int32),
+        "meta__clean_non_finite_removed": np.array([int(np.sum(fail_non_finite))], dtype=np.int32),
+        "meta__clean_state_range_removed": np.array([int(np.sum(fail_state_range))], dtype=np.int32),
+        "meta__clean_dt_removed": np.array([int(np.sum(fail_dt))], dtype=np.int32),
+        "meta__clean_clearance_removed": np.array([int(np.sum(fail_clear))], dtype=np.int32),
         "meta__num_train": np.array([int(train_idx.shape[0])], dtype=np.int32),
         "meta__num_val": np.array([int(val_idx.shape[0])], dtype=np.int32),
         "meta__num_test": np.array([int(test_idx.shape[0])], dtype=np.int32),
@@ -432,6 +573,17 @@ def build_dataset(args: argparse.Namespace) -> None:
         "meta__heading_source": np.array([str(merged_meta["meta__heading_source"].reshape(-1)[0])], dtype=object),
         "meta__control_definition": np.array([str(merged_meta["meta__control_definition"].reshape(-1)[0])], dtype=object),
         "meta__label_source": np.array([str(args.label_source)], dtype=object),
+        "meta__weight_near_clearance_thr": np.array([float(args.weight_near_clearance_thr)], dtype=np.float32),
+        "meta__weight_high_wz_thr": np.array([float(args.weight_high_wz_thr)], dtype=np.float32),
+        "meta__weight_near_factor": np.array([float(args.weight_near_factor)], dtype=np.float32),
+        "meta__weight_recover_factor": np.array([float(args.weight_recover_factor)], dtype=np.float32),
+        "meta__weight_high_wz_factor": np.array([float(args.weight_high_wz_factor)], dtype=np.float32),
+        "meta__weight_max": np.array([float(args.weight_max)], dtype=np.float32),
+        "meta__train_near_ratio": np.array([sample_w_summary["near_ratio"]], dtype=np.float32),
+        "meta__train_recover_ratio": np.array([sample_w_summary["recover_ratio"]], dtype=np.float32),
+        "meta__train_high_wz_ratio": np.array([sample_w_summary["high_wz_ratio"]], dtype=np.float32),
+        "meta__train_sample_weight_mean": np.array([sample_w_summary["weight_mean"]], dtype=np.float32),
+        "meta__train_sample_weight_max": np.array([sample_w_summary["weight_max"]], dtype=np.float32),
         "train__x_t": x_train,
         "train__u_t": u_train,
         "train__ctx_t": ctx_train,
@@ -440,6 +592,13 @@ def build_dataset(args: argparse.Namespace) -> None:
         "train__dt": dt_train,
         "train__obs_dist_tp1": obs_dist_train,
         "train__obs_dist_valid": obs_valid_train,
+        "train__sample_weight": sample_w_train.astype(np.float32),
+        "train__tag_near": sample_w_tags["near_mask"],
+        "train__tag_recover": sample_w_tags["recover_mask"],
+        "train__tag_high_wz": sample_w_tags["high_wz_mask"],
+        "train__recover_flag": recover_train.astype(np.float32),
+        "train__wz_abs": wz_abs_train.astype(np.float32),
+        "train__clearance_t": clear_train.astype(np.float32),
         "val__x_t": x_val,
         "val__u_t": u_val,
         "val__ctx_t": ctx_val,
@@ -448,6 +607,9 @@ def build_dataset(args: argparse.Namespace) -> None:
         "val__dt": dt_val,
         "val__obs_dist_tp1": obs_dist_val,
         "val__obs_dist_valid": obs_valid_val,
+        "val__recover_flag": recover_val.astype(np.float32),
+        "val__wz_abs": wz_abs_val.astype(np.float32),
+        "val__clearance_t": clear_val.astype(np.float32),
         "test__x_t": x_test,
         "test__u_t": u_test,
         "test__ctx_t": ctx_test,
@@ -456,6 +618,9 @@ def build_dataset(args: argparse.Namespace) -> None:
         "test__dt": dt_test,
         "test__obs_dist_tp1": obs_dist_test,
         "test__obs_dist_valid": obs_valid_test,
+        "test__recover_flag": recover_test.astype(np.float32),
+        "test__wz_abs": wz_abs_test.astype(np.float32),
+        "test__clearance_t": clear_test.astype(np.float32),
         "stats__x_mean": x_mean.astype(np.float32),
         "stats__x_std": x_std.astype(np.float32),
         "stats__u_mean": u_mean.astype(np.float32),
@@ -471,9 +636,17 @@ def build_dataset(args: argparse.Namespace) -> None:
     np.savez_compressed(args.output, **save_dict)
     print(f"Saved ICODE training bundle to: {args.output}")
     print(
-        f"Total transitions: {n} "
+        f"Total transitions: {n} (raw={n_raw}, removed={n_raw - n_kept}) "
         f"(train={train_idx.shape[0]}, val={val_idx.shape[0]}, test={test_idx.shape[0]}) "
         f"| split_by={split_by}"
+    )
+    print(
+        "Train weighting: "
+        f"near_ratio={sample_w_summary['near_ratio']:.3f}, "
+        f"recover_ratio={sample_w_summary['recover_ratio']:.3f}, "
+        f"high_wz_ratio={sample_w_summary['high_wz_ratio']:.3f}, "
+        f"w_mean={sample_w_summary['weight_mean']:.3f}, "
+        f"w_max={sample_w_summary['weight_max']:.3f}"
     )
 
 
@@ -498,6 +671,22 @@ def build_argparser() -> argparse.ArgumentParser:
         choices=("episode", "transition"),
         help="Dataset split granularity.",
     )
+    parser.add_argument("--clean-max-abs-v", type=float, default=3.5, help="Drop transitions with |v_body| above this.")
+    parser.add_argument("--clean-max-abs-wz", type=float, default=8.0, help="Drop transitions with |wz_body| above this.")
+    parser.add_argument("--clean-max-abs-wheel", type=float, default=55.0, help="Drop transitions with wheel speed magnitude above this.")
+    parser.add_argument("--clean-min-dt", type=float, default=1e-4, help="Minimum valid positive dt.")
+    parser.add_argument("--clean-max-dt", type=float, default=0.08, help="Maximum valid positive dt.")
+    parser.add_argument(
+        "--clean-enforce-dt-positive",
+        action="store_true",
+        help="If set, drop all dt<=clean-min-dt transitions (strict mode).",
+    )
+    parser.add_argument("--weight-near-clearance-thr", type=float, default=0.35)
+    parser.add_argument("--weight-high-wz-thr", type=float, default=1.2)
+    parser.add_argument("--weight-near-factor", type=float, default=2.0)
+    parser.add_argument("--weight-recover-factor", type=float, default=2.5)
+    parser.add_argument("--weight-high-wz-factor", type=float, default=1.8)
+    parser.add_argument("--weight-max", type=float, default=4.0)
     return parser
 
 

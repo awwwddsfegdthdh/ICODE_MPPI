@@ -1,5 +1,5 @@
 {
-  "plan_name": "e1_weighted_sampling_60_25_15_multixml_depth",
+  "plan_name": "e1_weighted_sampling_50_20_30_multixml_depth",
   "horizon": 200,
   "chunk_episodes": 40,
   "xml_rotation": {
@@ -59,7 +59,7 @@
     "--height",
     "72",
     "--post-collision-random-steps",
-    "6",
+    "10",
     "--post-collision-random-prob",
     "1.0"
   ],
@@ -81,7 +81,7 @@
   "profiles": [
     {
       "name": "avoidance_core",
-      "weight": 0.6,
+      "weight": 0.5,
       "collect_args": [
         "--control-mode",
         "expert",
@@ -125,7 +125,7 @@
     },
     {
       "name": "normal_nav",
-      "weight": 0.25,
+      "weight": 0.2,
       "collect_args": [
         "--control-mode",
         "random_walk",
@@ -172,7 +172,7 @@
     },
     {
       "name": "edge_recovery",
-      "weight": 0.15,
+      "weight": 0.3,
       "collect_args": [
         "--control-mode",
         "iid",
